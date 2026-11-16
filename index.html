@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Family Tree Archive</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Password Gate (shown in encrypted static builds) -->
+  <div class="lock-screen hidden" id="lockScreen">
+    <div class="lock-card">
+      <div class="lock-crest" aria-hidden="true">
+        <svg viewBox="0 0 40 40" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="20" cy="31" r="4" />
+          <circle cx="11" cy="18" r="3.5" />
+          <circle cx="29" cy="18" r="3.5" />
+          <circle cx="7" cy="7" r="2.5" />
+          <circle cx="15" cy="7" r="2.5" />
+          <circle cx="25" cy="7" r="2.5" />
+          <circle cx="33" cy="7" r="2.5" />
+          <path d="M20 27v-5M11 18h18M11 14.5v-3M7 9.5v2h8v-2M29 14.5v-3M25 9.5v2h8v-2" />
+        </svg>
+      </div>
+      <h1 class="lock-title" id="lockTitle">Family Tree Archive</h1>
+      <p class="lock-sub">This family archive is encrypted. Enter the family password to unlock photos, stories, records, and the interactive tree.</p>
+
+      <form id="lockForm" class="lock-form">
+        <div class="lock-input-wrap">
+          <input id="lockPassword" type="password" placeholder="Enter family password" autocomplete="current-password" required />
+          <button type="button" class="lock-eye" id="togglePwBtn" title="Show/hide password" aria-label="Show password">👁</button>
+        </div>
+        <label class="lock-remember">
+          <input type="checkbox" id="rememberPw" />
+          <span>Keep unlocked on this browser</span>
+        </label>
+        <div class="lock-error hidden" id="lockError"></div>
+        <button type="submit" class="btn primary lock-submit" id="lockSubmit">Unlock Family Archive</button>
+      </form>
+      <div class="lock-status hidden" id="lockStatus"></div>
+    </div>
+  </div>
+
+  <!-- Main Application Shell -->
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-row">
+          <div>
+            <div class="brand-title" id="treeTitle">Family Tree Archive</div>
+            <div class="brand-sub" id="treeStats">Loading…</div>
+          </div>
+          <button class="icon-btn mobile-only" id="sidebarCloseBtn" aria-label="Close people list">✕</button>
+        </div>
+      </div>
+
+      <div class="sidebar-controls">
+        <input id="searchInput" type="search" placeholder="Search 419 people, places, years…" autocomplete="off" />
+        <div class="filter-row">
+          <button class="chip active" data-filter="all">All</button>
+          <button class="chip" data-filter="media">Has Media</button>
+          <button class="chip" data-filter="sources">Has Sources</button>
+        </div>
+      </div>
+
+      <div class="people-list" id="peopleList"></div>
+    </aside>
+
+    <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
+
+    <main class="main-area">
+      <header class="top-nav">
+        <div class="nav-left">
+          <button class="icon-btn mobile-only" id="sidebarOpenBtn" aria-label="Open people list">☰</button>
+          <div class="nav-tabs">
+            <button class="nav-tab active" data-view="pedigree">Family Tree</button>
+            <button class="nav-tab" data-view="profile">Profile</button>
+            <button class="nav-tab" data-view="media">All Media</button>
+            <button class="nav-tab" data-view="sources">All Sources</button>
+          </div>
+        </div>
+        <div class="top-actions" id="topActions"></div>
+      </header>
+
+      <section class="content-scroll" id="mainContent">
+        <div class="loading">Loading tree…</div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Media Modal -->
+  <div class="modal-backdrop hidden" id="mediaModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="modalTitle"></div>
+        <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- Feedback Modal -->
+  <div class="modal-backdrop hidden" id="feedbackModal">
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <div class="modal-title" id="fbModalTitle">Send Feedback</div>
+        <button class="modal-close" id="fbModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="fb-person-banner" id="fbPersonBanner"></div>
+        <div class="fb-form">
+          <label class="fb-field">
+            <span>Feedback Type</span>
+            <select id="fbTopic">
+              <option value="Correction / Date or Name Fix">Correction / Date or Name Fix</option>
+              <option value="Add a Story or Memory">Add a Story or Memory</option>
+              <option value="Missing Photo or Document">Missing Photo or Document</option>
+              <option value="Relationship Question">Relationship Question</option>
+              <option value="Other Feedback">Other Feedback</option>
+            </select>
+          </label>
+          <label class="fb-field">
+            <span>Your Name (optional)</span>
+            <input type="text" id="fbSenderName" placeholder="e.g. Cousin Sarah" />
+          </label>
+          <label class="fb-field">
+            <span>Details / Notes</span>
+            <textarea id="fbMessage" rows="5" placeholder="Share a correction, story, date, or question about this person…"></textarea>
+          </label>
+          <div class="fb-recipient-note" id="fbRecipientNote"></div>
+          <div class="fb-actions">
+            <a id="fbMailtoBtn" class="btn primary" href="mailto:">✉ Open Email App</a>
+            <a id="fbGmailBtn" class="btn" href="https://mail.google.com/" target="_blank" rel="noopener">Open in Gmail</a>
+            <button type="button" id="fbCopyBtn" class="btn">Copy Message</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
