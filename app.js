@@ -14,6 +14,9 @@ let treeRootPid = null;
 let selectedTreePid = null;
 let expandedParents = new Set();
 let expandedDown = new Set();
+let expandedSiblings = new Set();
+let collapsedSiblings = new Set();
+let showAllSiblings = false;
 let panX = 0;
 let panY = 0;
 let zoom = 1;
@@ -25,11 +28,11 @@ const mediaUrlPromiseCache = new Map();
 const mediaUrlSyncCache = new Map();
 let imgObserver = null;
 
-const CARD_W = 220;
-const CARD_H = 76;
+const CARD_W = 232;
+const CARD_H = 88;
 const COUPLE_GAP = 34;
-const SIBLING_GAP = 26;
-const ROW_H = 148;
+const SIBLING_GAP = 24;
+const ROW_H = 164;
 
 const esc = (s) =>
   String(s ?? "")
@@ -317,6 +320,10 @@ function startApp() {
   const c = DATA.tree.counts;
   document.getElementById("treeStats").textContent =
     `${c.people} people · ${c.facts} facts · ${c.mediaDownloaded}/${c.mediaTotal} media`;
+  const searchEl = document.getElementById("searchInput");
+  if (searchEl) {
+    searchEl.placeholder = `Search ${c.people} people, places, years, notes…`;
+  }
 
   bindControls();
   renderSidebar();
@@ -328,6 +335,8 @@ function initTreeRoot(pid) {
   selectedTreePid = pid;
   expandedParents = new Set();
   expandedDown = new Set();
+  expandedSiblings = new Set();
+  collapsedSiblings = new Set();
   lastNodePositions = new Map();
   treeNeedsInitialCenter = true;
 
@@ -423,13 +432,18 @@ function filteredPeople() {
       if (activeFilter === "media" && (!p.mediaIds || p.mediaIds.length === 0)) return false;
       if (activeFilter === "sources" && (!p.sources || p.sources.length === 0)) return false;
       if (!searchQuery) return true;
+      const factSnippets = (p.facts || [])
+        .filter((f) => ["Political", "Election", "Military", "Occupation"].includes(f.type) || (f.description && /occupation/i.test(f.description)))
+        .flatMap((f) => [f.title, f.value, f.description]);
       const hay = [
         p.name,
         p.birthDate,
         p.birthPlace,
         p.deathDate,
         p.deathPlace,
+        p.notes,
         ...(p.alternateNames || []),
+        ...factSnippets,
       ]
         .filter(Boolean)
         .join(" ")
@@ -493,6 +507,180 @@ function renderMain() {
   }
 }
 
+/* ==================== Biographical Highlights & Sibling Helpers ==================== */
+
+function parseBirthYear(p) {
+  if (!p) return 9999;
+  const s = p.birthDate || p.lifeRange || "";
+  const m = String(s).match(/\b(1[5-9]\d{2}|20\d{2})\b/);
+  return m ? parseInt(m[1], 10) : 9999;
+}
+
+function getBioHighlights(p) {
+  if (!p) {
+    return {
+      notes: "",
+      political: [],
+      military: [],
+      occupations: [],
+      stories: [],
+      lifeStory: "",
+      cardTagline: null,
+      hasRichBio: false,
+    };
+  }
+  const notes = (p.notes || "").trim();
+  const lifeStory = (p.lifeStory?.narrative || p.lifeStory?.defaultNarrative || "").trim();
+
+  const political = [];
+  const military = [];
+  const occupations = [];
+  const occSeen = new Set();
+
+  for (const f of p.facts || []) {
+    const t = (f.type || "").toLowerCase();
+    if (t === "political" || t === "election") {
+      const summary = f.value || f.description || f.title || "Political campaign";
+      political.push({
+        date: f.date || "",
+        title: f.title && !f.title.startsWith("Person/") ? f.title : "Political",
+        summary,
+        detail: f.description || f.narrative || f.value || "",
+        place: f.place || "",
+      });
+    } else if (t === "military") {
+      const descClean = (f.description || "").replace(/\s*\n+\s*/g, " · ").trim();
+      const summary = descClean || f.value || (f.date ? `Military (${f.date})` : f.place ? `Military (${f.place})` : "Military service");
+      military.push({
+        date: f.date || "",
+        title: f.title && !f.title.startsWith("Person/") ? f.title : "Military Service",
+        summary,
+        hasCustomDesc: Boolean(descClean || f.value),
+        detail: descClean || f.narrative || (f.place ? `Served in ${f.place}` : ""),
+        place: f.place || "",
+      });
+    } else if (t === "occupation") {
+      const val = (f.value || f.description || "").trim();
+      if (val && !occSeen.has(val.toLowerCase())) {
+        occSeen.add(val.toLowerCase());
+        occupations.push({ label: val, date: f.date || "" });
+      }
+    } else if (f.description && /occupation\s*:/i.test(f.description)) {
+      const m = f.description.match(/occupation\s*:\s*([^;\n]+)/i);
+      if (m && m[1]) {
+        const val = m[1].trim();
+        if (val && !occSeen.has(val.toLowerCase())) {
+          occSeen.add(val.toLowerCase());
+          occupations.push({ label: val, date: f.date || "" });
+        }
+      }
+    }
+  }
+
+  const richMilitary = military
+    .filter((m) => m.detail || m.date)
+    .sort((a, b) => Number(b.hasCustomDesc) - Number(a.hasCustomDesc));
+  const finalMilitary = richMilitary.length ? richMilitary : military.slice(0, 1);
+
+  const stories = (p.mediaIds || [])
+    .map((mid) => DATA?.media?.[mid])
+    .filter((m) => m && (m.type === "story_pdf" || m.type === "story_inline"))
+    .map((m) => ({
+      id: m.id,
+      type: m.type,
+      title: (m.title || m.id).replace(/_/g, " "),
+    }));
+
+  let cardTagline = null;
+  if (political.length) {
+    const pol = political[0];
+    cardTagline = {
+      kind: "political",
+      icon: "🏛",
+      text: `${pol.date ? pol.date + " · " : ""}${pol.summary}`,
+      tooltip: pol.detail || pol.summary,
+    };
+  } else if (finalMilitary.length) {
+    const mil = finalMilitary[0];
+    const shortMil = mil.hasCustomDesc
+      ? mil.summary
+      : [mil.date ? `Military (${mil.date})` : "Military service", mil.place].filter(Boolean).join(" · ");
+    cardTagline = {
+      kind: "military",
+      icon: "🎖",
+      text: shortMil,
+      tooltip: [mil.date, mil.detail || mil.summary, mil.place].filter(Boolean).join(" · "),
+    };
+  } else if (occupations.length) {
+    const occText = occupations.map((o) => o.label).join(", ");
+    cardTagline = {
+      kind: "occupation",
+      icon: "💼",
+      text: occText,
+      tooltip: `Occupation: ${occText}`,
+    };
+  } else if (stories.length) {
+    cardTagline = {
+      kind: "story",
+      icon: "📖",
+      text: stories[0].title,
+      tooltip: `Linked story: ${stories[0].title}`,
+    };
+  } else if (notes) {
+    cardTagline = {
+      kind: "note",
+      icon: "📝",
+      text: notes,
+      tooltip: notes,
+    };
+  }
+
+  return {
+    notes,
+    political,
+    military: finalMilitary,
+    occupations,
+    stories,
+    lifeStory,
+    cardTagline,
+    hasRichBio: Boolean(political.length || finalMilitary.length || occupations.length || stories.length || notes),
+  };
+}
+
+function isSiblingsExpanded(pid) {
+  return showAllSiblings ? !collapsedSiblings.has(pid) : expandedSiblings.has(pid);
+}
+
+function toggleSiblingsFor(pid) {
+  if (showAllSiblings) {
+    if (collapsedSiblings.has(pid)) collapsedSiblings.delete(pid);
+    else collapsedSiblings.add(pid);
+  } else {
+    if (expandedSiblings.has(pid)) expandedSiblings.delete(pid);
+    else expandedSiblings.add(pid);
+  }
+}
+
+function getPersonSiblings(pid, excludePids = null) {
+  const p = DATA.people[pid];
+  if (!p) return [];
+  const raw = [
+    ...(p.family.siblings || []).map((s) => ({ id: s.id, isHalf: false })),
+    ...(p.family.halfSiblings || []).map((s) => ({ id: s.id, isHalf: true })),
+  ];
+  const seen = new Set([pid]);
+  const out = [];
+  for (const item of raw) {
+    if (seen.has(item.id)) continue;
+    if (excludePids && excludePids.has(item.id)) continue;
+    if (!DATA.people[item.id]) continue;
+    seen.add(item.id);
+    out.push(item);
+  }
+  out.sort((a, b) => parseBirthYear(DATA.people[a.id]) - parseBirthYear(DATA.people[b.id]));
+  return out;
+}
+
 /* ==================== Vertical Dynamic Family Graph ==================== */
 
 function collectAllAncestors(pid, seen = new Set()) {
@@ -505,7 +693,21 @@ function collectAllAncestors(pid, seen = new Set()) {
   return seen;
 }
 
-function buildAncSubtree(pid, row) {
+function collectVisiblePrimaryAncPids(pid, out = new Set()) {
+  if (!pid || out.has(pid)) return out;
+  const p = DATA.people[pid];
+  if (!p) return out;
+  out.add(pid);
+  if (expandedParents.has(pid)) {
+    const fId = p.family.fathers?.[0]?.id;
+    const mId = p.family.mothers?.[0]?.id;
+    if (fId) collectVisiblePrimaryAncPids(fId, out);
+    if (mId) collectVisiblePrimaryAncPids(mId, out);
+  }
+  return out;
+}
+
+function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null) {
   const p = DATA.people[pid];
   if (!p) return null;
   const fatherId = p.family.fathers?.[0]?.id || null;
@@ -513,51 +715,80 @@ function buildAncSubtree(pid, row) {
   const hasParents = Boolean(fatherId || motherId);
   const isExpanded = hasParents && expandedParents.has(pid);
 
+  const sibList = getPersonSiblings(pid, primaryPids);
+  const sibCount = sibList.length;
+  const sibsExpanded = sibCount > 0 && isSiblingsExpanded(pid);
+  const sibStripW = sibsExpanded
+    ? (sibCount + 1) * CARD_W + sibCount * SIBLING_GAP
+    : CARD_W;
+
   if (!isExpanded) {
+    const defaultAnchorCx =
+      sibSide === "left" ? sibStripW - CARD_W / 2 : CARD_W / 2;
     return {
       pid,
       row,
-      width: CARD_W,
-      defaultAnchorCx: CARD_W / 2,
+      width: sibStripW,
+      parentsW: 0,
+      parentsAnchorRelX: 0,
+      defaultAnchorCx,
       father: null,
       mother: null,
       hasParents,
       parentCount: (fatherId ? 1 : 0) + (motherId ? 1 : 0),
       isExpanded: false,
+      sibSide,
+      sibList,
+      sibCount,
+      sibsExpanded,
+      sibStripW,
     };
   }
 
-  const fNode = fatherId ? buildAncSubtree(fatherId, row - 1) : null;
-  const mNode = motherId ? buildAncSubtree(motherId, row - 1) : null;
+  const fNode = fatherId ? buildAncSubtree(fatherId, row - 1, "left", primaryPids) : null;
+  const mNode = motherId ? buildAncSubtree(motherId, row - 1, "right", primaryPids) : null;
 
+  let parentsW;
+  let parentsAnchorRelX;
   if (fNode && mNode) {
-    const width = fNode.width + COUPLE_GAP + mNode.width;
-    const splitRelX = fNode.width + COUPLE_GAP / 2;
-    return {
-      pid,
-      row,
-      width,
-      defaultAnchorCx: splitRelX,
-      splitRelX,
-      father: fNode,
-      mother: mNode,
-      hasParents,
-      parentCount: 2,
-      isExpanded: true,
-    };
+    parentsW = fNode.width + COUPLE_GAP + mNode.width;
+    parentsAnchorRelX = fNode.width + COUPLE_GAP / 2;
+  } else {
+    const only = fNode || mNode;
+    parentsW = only.width;
+    parentsAnchorRelX = only.defaultAnchorCx;
   }
 
-  const only = fNode || mNode;
+  const width = Math.max(parentsW, sibStripW);
+  let defaultAnchorCx;
+  if (sibsExpanded) {
+    const stripLeft = (width - sibStripW) / 2;
+    defaultAnchorCx =
+      sibSide === "left"
+        ? stripLeft + sibStripW - CARD_W / 2
+        : stripLeft + CARD_W / 2;
+  } else {
+    const parentsOffset = (width - parentsW) / 2;
+    defaultAnchorCx = parentsOffset + parentsAnchorRelX;
+  }
+
   return {
     pid,
     row,
-    width: only.width,
-    defaultAnchorCx: only.defaultAnchorCx,
+    width,
+    parentsW,
+    parentsAnchorRelX,
+    defaultAnchorCx,
     father: fNode,
     mother: mNode,
     hasParents,
-    parentCount: 1,
+    parentCount: (fNode ? 1 : 0) + (mNode ? 1 : 0),
     isExpanded: true,
+    sibSide,
+    sibList,
+    sibCount,
+    sibsExpanded,
+    sibStripW,
   };
 }
 
@@ -613,7 +844,22 @@ function buildDescSubtree(pid, row, seenDown, isChildLevel = true) {
 
 function computeFamilyLayout() {
   const nodes = new Map(); // pid -> node meta
-  const edges = []; // { type: 'couple'|'line', d?, x1?, y1?, x2?, y2?, cx?, cy?, pids: [] }
+  const edges = []; // { type: 'couple'|'line', d?, x1?, y1?, x2?, y2?, midX?, midY?, pids: [], dashed?, sibling? }
+
+  const rootP = DATA.people[treeRootPid];
+  const rootSpouses = rootP?.family.spouses || [];
+  const rootChildren = rootP?.family.children || [];
+  const rootHasDown = rootSpouses.length > 0 || rootChildren.length > 0;
+  const rootShowDown = rootHasDown && expandedDown.has(treeRootPid);
+
+  // Collect all primary visible ancestor/root/spouse PIDs so sibling handles never duplicate visible primary nodes
+  const primaryPids = new Set();
+  collectVisiblePrimaryAncPids(treeRootPid, primaryPids);
+  if (rootShowDown) {
+    for (const sp of rootSpouses) {
+      collectVisiblePrimaryAncPids(sp.id, primaryPids);
+    }
+  }
 
   const placeAnc = (anc, leftX, forcedCardCx, isRootNode = false) => {
     const cardCx =
@@ -623,7 +869,6 @@ function computeFamilyLayout() {
     const x = cardCx - CARD_W / 2;
     const y = anc.row * ROW_H;
 
-    const p = DATA.people[anc.pid];
     const existing = nodes.get(anc.pid);
     nodes.set(anc.pid, {
       pid: anc.pid,
@@ -633,6 +878,8 @@ function computeFamilyLayout() {
       cy: y + CARD_H / 2,
       row: anc.row,
       isRoot: existing?.isRoot || isRootNode,
+      isSibling: false,
+      isHalfSibling: false,
       hasParents: anc.hasParents,
       parentCount: anc.parentCount,
       parentsExpanded: anc.isExpanded,
@@ -640,16 +887,93 @@ function computeFamilyLayout() {
       downCount: existing?.downCount || 0,
       downExpanded: existing?.downExpanded || false,
       canToggleDown: existing?.canToggleDown || false,
+      sibCount: anc.sibCount,
+      sibsExpanded: anc.sibsExpanded,
+      sibSide: anc.sibSide,
     });
 
-    if (!anc.isExpanded) return;
+    // Place expanded siblings alongside this node inside [leftX, leftX + anc.width]
+    const groupMembers = [{ pid: anc.pid, cx: cardCx, isHalf: false }];
+    if (anc.sibsExpanded && anc.sibList.length > 0) {
+      const k = anc.sibList.length;
+      for (let i = 0; i < k; i++) {
+        const sib = anc.sibList[i];
+        if (nodes.has(sib.id)) continue;
+        const sCx =
+          anc.sibSide === "left"
+            ? cardCx - (k - i) * (CARD_W + SIBLING_GAP)
+            : cardCx + (i + 1) * (CARD_W + SIBLING_GAP);
+        nodes.set(sib.id, {
+          pid: sib.id,
+          x: sCx - CARD_W / 2,
+          y,
+          cx: sCx,
+          cy: y + CARD_H / 2,
+          row: anc.row,
+          isRoot: false,
+          isSibling: true,
+          isHalfSibling: sib.isHalf,
+          siblingAnchorPid: anc.pid,
+          hasParents: false,
+          parentCount: 0,
+          parentsExpanded: false,
+          hasDown: false,
+          downCount: 0,
+          downExpanded: false,
+          canToggleDown: false,
+          sibCount: 0,
+          sibsExpanded: false,
+          sibSide: anc.sibSide,
+        });
+        groupMembers.push({ pid: sib.id, cx: sCx, isHalf: sib.isHalf });
+      }
+    }
+
+    const groupMinCx = Math.min(...groupMembers.map((g) => g.cx));
+    const groupMaxCx = Math.max(...groupMembers.map((g) => g.cx));
+    const groupMidCx = (groupMinCx + groupMaxCx) / 2;
+    const groupPids = groupMembers.map((g) => g.pid);
+
+    if (!anc.isExpanded) {
+      // Parents collapsed, but siblings expanded -> draw subtle sibling bracket above the group
+      if (groupMembers.length > 1) {
+        const busY = y - 22;
+        edges.push({
+          type: "line",
+          d: `M ${groupMinCx} ${busY} H ${groupMaxCx}`,
+          pids: groupPids,
+          sibling: true,
+        });
+        for (const g of groupMembers) {
+          edges.push({
+            type: "line",
+            d: `M ${g.cx} ${busY} V ${y}`,
+            pids: groupPids,
+            sibling: true,
+            dashed: g.isHalf,
+          });
+        }
+      }
+      return;
+    }
+
+    // Center parents above the sibling group, clamped strictly inside [leftX, leftX + anc.width]
+    const idealParentsLeftX = groupMidCx - anc.parentsAnchorRelX;
+    const parentsLeftX = Math.max(
+      leftX,
+      Math.min(leftX + anc.width - anc.parentsW, idealParentsLeftX)
+    );
+
+    let parentOriginX;
+    let parentOriginY;
+    let parentPids;
 
     if (anc.father && anc.mother) {
-      const splitX = leftX + anc.father.width + COUPLE_GAP / 2;
+      const splitX = parentsLeftX + anc.father.width + COUPLE_GAP / 2;
       const fCx = splitX - COUPLE_GAP / 2 - CARD_W / 2;
       const mCx = splitX + COUPLE_GAP / 2 + CARD_W / 2;
-      placeAnc(anc.father, leftX, fCx, false);
-      placeAnc(anc.mother, leftX + anc.father.width + COUPLE_GAP, mCx, false);
+      placeAnc(anc.father, parentsLeftX, fCx, false);
+      placeAnc(anc.mother, parentsLeftX + anc.father.width + COUPLE_GAP, mCx, false);
 
       const parentRowMidY = (anc.row - 1) * ROW_H + CARD_H / 2;
       edges.push({
@@ -660,43 +984,59 @@ function computeFamilyLayout() {
         y2: parentRowMidY,
         midX: splitX,
         midY: parentRowMidY,
-        pids: [anc.father.pid, anc.mother.pid, anc.pid],
+        pids: [anc.father.pid, anc.mother.pid, ...groupPids],
       });
 
-      const childTopX = cardCx;
-      const childTopY = y;
-      let d;
-      if (Math.abs(splitX - childTopX) < 1) {
-        d = `M ${splitX} ${parentRowMidY} V ${childTopY}`;
-      } else {
-        const elbowY = childTopY - 30;
-        d = `M ${splitX} ${parentRowMidY} V ${elbowY} H ${childTopX} V ${childTopY}`;
-      }
-      edges.push({
-        type: "line",
-        d,
-        pids: [anc.father.pid, anc.mother.pid, anc.pid],
-      });
+      parentOriginX = splitX;
+      parentOriginY = parentRowMidY;
+      parentPids = [anc.father.pid, anc.mother.pid];
     } else {
       const only = anc.father || anc.mother;
-      placeAnc(only, leftX, null, false);
+      placeAnc(only, parentsLeftX, null, false);
       const pNode = nodes.get(only.pid);
-      const pBotX = pNode.cx;
-      const pBotY = pNode.y + CARD_H;
+      parentOriginX = pNode.cx;
+      parentOriginY = pNode.y + CARD_H;
+      parentPids = [only.pid];
+    }
+
+    if (groupMembers.length === 1) {
       const childTopX = cardCx;
       const childTopY = y;
       let d;
-      if (Math.abs(pBotX - childTopX) < 1) {
-        d = `M ${pBotX} ${pBotY} V ${childTopY}`;
+      if (Math.abs(parentOriginX - childTopX) < 1) {
+        d = `M ${parentOriginX} ${parentOriginY} V ${childTopY}`;
       } else {
         const elbowY = childTopY - 30;
-        d = `M ${pBotX} ${pBotY} V ${elbowY} H ${childTopX} V ${childTopY}`;
+        d = `M ${parentOriginX} ${parentOriginY} V ${elbowY} H ${childTopX} V ${childTopY}`;
       }
       edges.push({
         type: "line",
         d,
-        pids: [only.pid, anc.pid],
+        pids: [...parentPids, anc.pid],
       });
+    } else {
+      // Full sibling bus connecting parents down to all expanded siblings
+      const busY = y - 30;
+      edges.push({
+        type: "line",
+        d: `M ${parentOriginX} ${parentOriginY} V ${busY}`,
+        pids: [...parentPids, ...groupPids],
+      });
+      const minBusX = Math.min(parentOriginX, groupMinCx);
+      const maxBusX = Math.max(parentOriginX, groupMaxCx);
+      edges.push({
+        type: "line",
+        d: `M ${minBusX} ${busY} H ${maxBusX}`,
+        pids: [...parentPids, ...groupPids],
+      });
+      for (const g of groupMembers) {
+        edges.push({
+          type: "line",
+          d: `M ${g.cx} ${busY} V ${y}`,
+          pids: [...parentPids, g.pid],
+          dashed: g.isHalf,
+        });
+      }
     }
   };
 
@@ -705,7 +1045,7 @@ function computeFamilyLayout() {
     const totalW =
       childNodes.reduce((acc, cn) => acc + cn.width, 0) + SIBLING_GAP * (childNodes.length - 1);
     let curX = parentMidX - totalW / 2;
-    const busY = row * ROW_H + CARD_H + 34;
+    const busY = row * ROW_H + CARD_H + 36;
     const childTopY = (row + 1) * ROW_H;
     const childCxs = [];
 
@@ -719,8 +1059,6 @@ function computeFamilyLayout() {
         cCx = childMidX - COUPLE_GAP / 2 - CARD_W / 2;
         const spCx = childMidX + COUPLE_GAP / 2 + CARD_W / 2;
         const spId = cn.spousesShown[0].id;
-        const cP = DATA.people[cn.pid];
-        const spP = DATA.people[spId];
 
         nodes.set(cn.pid, {
           pid: cn.pid,
@@ -730,6 +1068,8 @@ function computeFamilyLayout() {
           cy: childTopY + CARD_H / 2,
           row: row + 1,
           isRoot: false,
+          isSibling: false,
+          isHalfSibling: false,
           hasParents: false,
           parentCount: 0,
           parentsExpanded: false,
@@ -737,6 +1077,9 @@ function computeFamilyLayout() {
           downCount: cn.downCount,
           downExpanded: cn.isExpanded,
           canToggleDown: cn.hasDown,
+          sibCount: 0,
+          sibsExpanded: false,
+          sibSide: "left",
         });
 
         nodes.set(spId, {
@@ -747,6 +1090,8 @@ function computeFamilyLayout() {
           cy: childTopY + CARD_H / 2,
           row: row + 1,
           isRoot: false,
+          isSibling: false,
+          isHalfSibling: false,
           hasParents: false,
           parentCount: 0,
           parentsExpanded: false,
@@ -754,6 +1099,9 @@ function computeFamilyLayout() {
           downCount: 0,
           downExpanded: false,
           canToggleDown: false,
+          sibCount: 0,
+          sibsExpanded: false,
+          sibSide: "right",
         });
 
         edges.push({
@@ -776,6 +1124,8 @@ function computeFamilyLayout() {
           cy: childTopY + CARD_H / 2,
           row: row + 1,
           isRoot: false,
+          isSibling: false,
+          isHalfSibling: false,
           hasParents: false,
           parentCount: 0,
           parentsExpanded: false,
@@ -783,6 +1133,9 @@ function computeFamilyLayout() {
           downCount: cn.downCount,
           downExpanded: cn.isExpanded,
           canToggleDown: cn.hasDown,
+          sibCount: 0,
+          sibsExpanded: false,
+          sibSide: "left",
         });
       }
 
@@ -824,13 +1177,8 @@ function computeFamilyLayout() {
     }
   };
 
-  const rootP = DATA.people[treeRootPid];
-  const rootSpouses = rootP?.family.spouses || [];
-  const rootChildren = rootP?.family.children || [];
-  const rootHasDown = rootSpouses.length > 0 || rootChildren.length > 0;
-  const rootShowDown = rootHasDown && expandedDown.has(treeRootPid);
-
-  const rootAnc = buildAncSubtree(treeRootPid, 0);
+  const rootSibSide = rootShowDown && rootSpouses.length > 0 ? "left" : "right";
+  const rootAnc = buildAncSubtree(treeRootPid, 0, rootSibSide, primaryPids);
 
   if (!rootShowDown || rootSpouses.length === 0) {
     placeAnc(rootAnc, 0, null, true);
@@ -849,7 +1197,7 @@ function computeFamilyLayout() {
     }
   } else if (rootSpouses.length === 1) {
     const spId = rootSpouses[0].id;
-    const spAnc = buildAncSubtree(spId, 0);
+    const spAnc = buildAncSubtree(spId, 0, "right", primaryPids);
     const coupleMidX = rootAnc.width + COUPLE_GAP / 2;
     const rootCardCx = coupleMidX - COUPLE_GAP / 2 - CARD_W / 2;
     const spCardCx = coupleMidX + COUPLE_GAP / 2 + CARD_W / 2;
@@ -897,14 +1245,13 @@ function computeFamilyLayout() {
 
     for (const sp of rootSpouses) {
       seenDown.add(sp.id);
-      const spAnc = buildAncSubtree(sp.id, 0);
+      const spAnc = buildAncSubtree(sp.id, 0, "right", primaryPids);
       const spCx = cursorX + CARD_W / 2;
       placeAnc(spAnc, cursorX, spCx, false);
       spouseCenters.push({ id: sp.id, cx: spCx });
       cursorX += Math.max(CARD_W, spAnc.width) + COUPLE_GAP;
     }
 
-    // Connect couple bars from root to first spouse and subsequent spouses
     if (spouseCenters.length > 0) {
       const firstSp = spouseCenters[0];
       const coupleMidX = (rootCardCx + firstSp.cx) / 2;
@@ -954,6 +1301,7 @@ function renderPedigreeView(container) {
         <span class="pill neutral" id="treeCountPill">${ancTotal} ancestors</span>
         <button class="btn" id="btnReset2Gen" title="Show 2 generations of parents">2 Gens</button>
         <button class="btn primary" id="btnExpandAll" title="Expand all ancestors of ${esc(rootP.name)}">Expand All Ancestors</button>
+        <button class="btn ${showAllSiblings ? "active-toggle" : ""}" id="btnToggleSiblings" aria-pressed="${showAllSiblings ? "true" : "false"}" title="Toggle showing siblings for all visible people in the tree">${showAllSiblings ? "✓ " : ""}Show Siblings</button>
         <button class="btn" id="btnCollapseAll">Collapse</button>
         ${
           !isOriginalRoot
@@ -978,13 +1326,21 @@ function renderPedigreeView(container) {
         <div class="tree-nodes" id="treeNodes"></div>
       </div>
       <div class="tree-inspector hidden" id="treeInspector"></div>
-      <div class="insp-hint">Drag canvas to pan · Scroll to zoom · Click ▲ / ▼ on cards to expand parents or family</div>
+      <div class="insp-hint">Drag canvas to pan · Scroll to zoom · Click ▲ / ▼ / + sibs on cards to expand family</div>
     </div>
   `;
 
   bindTreeToolbar(rootP);
   bindViewportPanZoom();
   renderTreeGraph(null);
+}
+
+function updateSiblingsToggleButton() {
+  const btn = document.getElementById("btnToggleSiblings");
+  if (!btn) return;
+  btn.classList.toggle("active-toggle", showAllSiblings);
+  btn.setAttribute("aria-pressed", showAllSiblings ? "true" : "false");
+  btn.textContent = showAllSiblings ? "✓ Show Siblings" : "Show Siblings";
 }
 
 function bindTreeToolbar(rootP) {
@@ -996,16 +1352,25 @@ function bindTreeToolbar(rootP) {
 
   document.getElementById("btnExpandAll").addEventListener("click", () => {
     expandedParents = collectAllAncestors(treeRootPid);
-    for (const sp of rootP.family.spouses || []) {
-      // Keep spouse ancestors as user toggled or optionally don't explode both unless clicked
-    }
     renderTreeGraph(null);
     fitTreeInViewport();
+  });
+
+  document.getElementById("btnToggleSiblings").addEventListener("click", () => {
+    showAllSiblings = !showAllSiblings;
+    expandedSiblings.clear();
+    collapsedSiblings.clear();
+    updateSiblingsToggleButton();
+    renderTreeGraph(selectedTreePid || treeRootPid);
   });
 
   document.getElementById("btnCollapseAll").addEventListener("click", () => {
     expandedParents.clear();
     expandedDown.clear();
+    expandedSiblings.clear();
+    collapsedSiblings.clear();
+    showAllSiblings = false;
+    updateSiblingsToggleButton();
     renderTreeGraph(null);
     centerOnNode(treeRootPid, true);
   });
@@ -1203,6 +1568,8 @@ function renderTreeGraph(anchorPid = null) {
       ...(selP.family.mothers || []),
       ...(selP.family.spouses || []),
       ...(selP.family.children || []),
+      ...(selP.family.siblings || []),
+      ...(selP.family.halfSiblings || []),
     ]) {
       activeSet.add(r.id);
     }
@@ -1220,7 +1587,15 @@ function renderTreeGraph(anchorPid = null) {
           <circle class="couple-joint" cx="${ed.midX}" cy="${ed.midY}" r="4.5" />
         `;
       }
-      return `<path class="edge-line ${isHi ? "highlight" : ""}" d="${ed.d}" />`;
+      const cls = [
+        "edge-line",
+        ed.sibling ? "sibling-edge" : "",
+        ed.dashed ? "half-sibling-edge" : "",
+        isHi ? "highlight" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `<path class="${cls}" d="${ed.d}" />`;
     })
     .join("");
   svgEl.innerHTML = edgesHtml;
@@ -1235,6 +1610,10 @@ function renderTreeGraph(anchorPid = null) {
       p.gender === "Female" ? "female" : p.gender === "Male" ? "male" : "unknown";
     const selCls = n.pid === selectedTreePid ? "selected" : "";
     const rootCls = n.isRoot ? "root-node" : "";
+    const sibCls = n.isSibling ? "sibling-node" : "";
+    const bio = getBioHighlights(p);
+    const bioCls = bio.hasRichBio ? "has-bio" : "";
+
     const pm = p.primaryMediaId ? DATA.media[p.primaryMediaId] : null;
     const syncHref = pm && pm.type === "photo" ? getSyncMediaHref(pm) : null;
     const initStr = esc(initials(p.name));
@@ -1258,21 +1637,41 @@ function renderTreeGraph(anchorPid = null) {
         }">${n.downExpanded ? "−" : `▼ ${n.downCount || 1}`}</button>`
       : "";
 
+    const sibLabel = n.sibCount === 1 ? "1 sib" : `${n.sibCount} sibs`;
+    const sibHandleSideCls = n.sibSide === "left" ? "t-handle-sib-left" : "t-handle-sib-right";
+    const sibHandle =
+      n.sibCount > 0
+        ? `<button class="t-handle t-handle-sib ${sibHandleSideCls} ${n.sibsExpanded ? "expanded" : ""}" data-handle-sib="${esc(n.pid)}" title="${
+            n.sibsExpanded ? `Hide ${sibLabel}` : `Show ${sibLabel}`
+          }">${n.sibsExpanded ? `− ${sibLabel}` : `+ ${sibLabel}`}</button>`
+        : "";
+
     const metaBits = [];
+    if (n.isHalfSibling) metaBits.push(`<span class="t-half-tag">Half-sib</span>`);
     if (p.mediaIds?.length) metaBits.push(`📷 ${p.mediaIds.length}`);
     if (p.sources?.length) metaBits.push(`📚 ${p.sources.length}`);
+    if (bio.stories.length && bio.cardTagline?.kind !== "story") metaBits.push(`📖 ${bio.stories.length}`);
+    if (bio.occupations.length && bio.cardTagline?.kind !== "occupation") metaBits.push(`💼`);
+    if (bio.military.length && bio.cardTagline?.kind !== "military") metaBits.push(`🎖`);
+    if (bio.notes && bio.cardTagline?.kind !== "note") metaBits.push(`📝`);
+
+    const bioStrip = bio.cardTagline
+      ? `<div class="t-node-bio bio-${esc(bio.cardTagline.kind)}" title="${esc(bio.cardTagline.tooltip)}"><span class="t-node-bio-ico">${bio.cardTagline.icon}</span><span class="t-node-bio-txt">${esc(bio.cardTagline.text)}</span></div>`
+      : "";
 
     cardsHtml.push(`
-      <div class="t-node ${genderCls} ${selCls} ${rootCls}" data-node-pid="${esc(n.pid)}" style="left:${n.x}px;top:${n.y}px">
+      <div class="t-node ${genderCls} ${selCls} ${rootCls} ${sibCls} ${bioCls}" data-node-pid="${esc(n.pid)}" style="left:${n.x}px;top:${n.y}px">
         ${topHandle}
         <button class="t-node-fb" data-node-fb="${esc(n.pid)}" title="Send feedback about ${esc(p.name)}" aria-label="Send feedback about ${esc(p.name)}">✉</button>
         <div class="tree-avatar">${avatarInner}</div>
         <div class="t-node-body">
           <div class="t-node-name" title="${esc(p.name)}">${esc(p.name)}</div>
           <div class="t-node-dates">${esc(p.lifeRange || (p.isLiving ? "Living" : "Dates unknown"))}</div>
+          ${bioStrip}
           ${metaBits.length ? `<div class="t-node-meta">${metaBits.join(" · ")}</div>` : ""}
         </div>
         ${bottomHandle}
+        ${sibHandle}
       </div>
     `);
   }
@@ -1316,6 +1715,16 @@ function renderTreeGraph(anchorPid = null) {
     });
   });
 
+  nodesEl.querySelectorAll("[data-handle-sib]").forEach((btn) => {
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pid = btn.dataset.handleSib;
+      toggleSiblingsFor(pid);
+      renderTreeGraph(pid);
+    });
+  });
+
   // Bind node click / double-click
   nodesEl.querySelectorAll(".t-node").forEach((card) => {
     card.addEventListener("click", () => {
@@ -1343,7 +1752,7 @@ function renderTreeGraph(anchorPid = null) {
   }
 
   hydrateMediaImages(nodesEl, true);
-  renderTreeInspector();
+  renderTreeInspector(nodes);
 }
 
 function fitOrCenterInitial() {
@@ -1369,7 +1778,7 @@ function fitOrCenterInitial() {
   applyTransform();
 }
 
-function renderTreeInspector() {
+function renderTreeInspector(layoutNodes = null) {
   const insp = document.getElementById("treeInspector");
   if (!insp) return;
   const p = DATA.people[selectedTreePid];
@@ -1379,6 +1788,9 @@ function renderTreeInspector() {
   }
   insp.classList.remove("hidden");
 
+  const bio = getBioHighlights(p);
+  const layoutNode = layoutNodes?.get(p.id) || null;
+
   const parents = [...(p.family.fathers || []), ...(p.family.mothers || [])];
   const spouses = p.family.spouses || [];
   const children = p.family.children || [];
@@ -1387,9 +1799,54 @@ function renderTreeInspector() {
   const relButtons = [
     ...parents.map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↑ ${esc(m.name)}</button>`),
     ...spouses.map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">♥ ${esc(m.name)}</button>`),
-    ...children.slice(0, 4).map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↓ ${esc(m.name)}</button>`),
-    ...siblings.slice(0, 3).map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↔ ${esc(m.name)}</button>`),
+    ...children.slice(0, 5).map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↓ ${esc(m.name)}</button>`),
+    ...siblings.slice(0, 6).map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↔ ${esc(m.name)}</button>`),
   ].join("");
+
+  // Build Biographical Highlights block for Quick Inspector
+  const bioParts = [];
+  if (bio.notes) {
+    bioParts.push(`<div class="insp-note"><strong>📝 Note:</strong> ${esc(bio.notes)}</div>`);
+  }
+  const factItems = [];
+  for (const pol of bio.political) {
+    factItems.push(
+      `<div class="insp-bio-item bio-political"><span class="insp-bio-ico">🏛</span><div><strong>${esc(pol.title)}${pol.date ? ` (${esc(pol.date)})` : ""}</strong>${pol.detail ? `<div class="insp-bio-sub">${esc(pol.detail)}</div>` : ""}</div></div>`
+    );
+  }
+  for (const mil of bio.military) {
+    factItems.push(
+      `<div class="insp-bio-item bio-military"><span class="insp-bio-ico">🎖</span><div><strong>${esc(mil.title)}${mil.date ? ` (${esc(mil.date)})` : ""}</strong>${mil.detail ? `<div class="insp-bio-sub">${esc(mil.detail)}</div>` : ""}</div></div>`
+    );
+  }
+  if (bio.occupations.length) {
+    factItems.push(
+      `<div class="insp-bio-item bio-occupation"><span class="insp-bio-ico">💼</span><div><strong>Occupation:</strong> ${esc(bio.occupations.map((o) => (o.date ? `${o.label} (${o.date})` : o.label)).join("; "))}</div></div>`
+    );
+  }
+  if (factItems.length) {
+    bioParts.push(`<div class="insp-bio-list">${factItems.join("")}</div>`);
+  }
+  if (bio.stories.length) {
+    bioParts.push(`
+      <div class="insp-stories">
+        ${bio.stories
+          .map(
+            (st) =>
+              `<button class="insp-story-btn" data-insp-story="${esc(st.id)}">📖 ${esc(st.title)}</button>`
+          )
+          .join("")}
+      </div>
+    `);
+  }
+  if (bio.lifeStory) {
+    bioParts.push(`<div class="insp-lifestory">${esc(bio.lifeStory)}</div>`);
+  }
+
+  const canToggleSibInInsp = layoutNode && layoutNode.sibCount > 0;
+  const sibBtnLabel = layoutNode?.sibsExpanded
+    ? `Hide ${layoutNode.sibCount} ${layoutNode.sibCount === 1 ? "Sibling" : "Siblings"}`
+    : `+ ${layoutNode?.sibCount} ${layoutNode?.sibCount === 1 ? "Sibling" : "Siblings"}`;
 
   insp.innerHTML = `
     <div class="insp-head">
@@ -1404,11 +1861,17 @@ function renderTreeInspector() {
       ${p.birthDate || p.birthPlace ? `<div><strong>Birth:</strong> ${esc([p.birthDate, p.birthPlace].filter(Boolean).join(" · "))}</div>` : ""}
       ${p.deathDate || p.deathPlace ? `<div><strong>Death:</strong> ${esc([p.deathDate, p.deathPlace].filter(Boolean).join(" · "))}</div>` : ""}
     </div>
+    ${bioParts.length ? `<div class="insp-bio">${bioParts.join("")}</div>` : ""}
     <div class="insp-actions">
       <button class="btn primary" id="inspProfileBtn">View Full Profile</button>
       ${
         p.id !== treeRootPid
           ? `<button class="btn" id="inspSetRootBtn">Set as Tree Root</button>`
+          : ""
+      }
+      ${
+        canToggleSibInInsp
+          ? `<button class="btn ${layoutNode.sibsExpanded ? "active-toggle" : ""}" id="inspToggleSibBtn">${esc(sibBtnLabel)}</button>`
           : ""
       }
       <button class="btn" id="inspFeedbackBtn" title="Send a correction, story, or note">✉ Feedback</button>
@@ -1430,8 +1893,19 @@ function renderTreeInspector() {
     selectPerson(p.id, false);
   });
 
+  document.getElementById("inspToggleSibBtn")?.addEventListener("click", () => {
+    toggleSiblingsFor(p.id);
+    renderTreeGraph(p.id);
+  });
+
   document.getElementById("inspFeedbackBtn").addEventListener("click", () => {
     openFeedbackModal(p.id);
+  });
+
+  insp.querySelectorAll("[data-insp-story]").forEach((b) => {
+    b.addEventListener("click", () => {
+      openMediaModal(b.dataset.inspStory);
+    });
   });
 
   insp.querySelectorAll("[data-insp-root]").forEach((b) => {
@@ -1451,7 +1925,8 @@ function renderProfile(container, p) {
     return;
   }
 
-  const storyText = p.lifeStory?.narrative || p.lifeStory?.defaultNarrative || "";
+  const bio = getBioHighlights(p);
+  const storyText = bio.lifeStory;
   const mediaCards = p.mediaIds
     .map((mid) => DATA.media[mid])
     .filter(Boolean)
@@ -1544,6 +2019,13 @@ function renderProfile(container, p) {
     )
     .join("");
 
+  const bioPills = [
+    ...bio.political.map((x) => `<span class="pill bio-pill-political">🏛 ${esc(x.date ? `${x.date} Political` : "Political")}</span>`),
+    ...bio.military.slice(0, 1).map((x) => `<span class="pill bio-pill-military">🎖 ${esc(x.date ? `Military (${x.date})` : "Military")}</span>`),
+    ...bio.occupations.slice(0, 2).map((x) => `<span class="pill bio-pill-occupation">💼 ${esc(x.label)}</span>`),
+    ...bio.stories.map((st) => `<button class="pill bio-pill-story" data-media="${esc(st.id)}">📖 ${esc(st.title)}</button>`),
+  ].join("");
+
   container.innerHTML = `
     <div class="profile-hero">
       <div id="heroAvatarWrap">${renderAvatar(p, "avatar-lg")}</div>
@@ -1565,6 +2047,7 @@ function renderProfile(container, p) {
           <span class="pill neutral">${p.facts.length} facts</span>
           <span class="pill neutral">${p.sources.length} sources</span>
           <span class="pill neutral">${p.mediaIds.length} media</span>
+          ${bioPills}
           ${(p.tags || []).map((t) => `<span class="pill warm">${esc(t)}</span>`).join("")}
         </div>
       </div>
@@ -1572,6 +2055,7 @@ function renderProfile(container, p) {
 
     <div class="profile-grid">
       <div>
+        ${bio.notes ? `<div class="card card-note"><h2>Notes</h2><p style="margin:0">${esc(bio.notes)}</p></div>` : ""}
         ${storyText ? `<div class="card"><h2>LifeStory</h2><p style="margin:0">${esc(storyText)}</p></div>` : ""}
         <div class="card">
           <h2>Timeline (${p.timeline.length})</h2>

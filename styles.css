@@ -377,6 +377,14 @@ img.enc-pending {
   border-color: var(--accent);
 }
 .btn.primary:hover { background: var(--accent-hover); }
+.btn.active-toggle {
+  background: var(--warm-soft);
+  color: var(--warm);
+  border-color: #d6a98f;
+}
+.btn.active-toggle:hover {
+  background: #eedbd0;
+}
 .btn-sm {
   padding: 4px 9px;
   font-size: 11px;
@@ -475,6 +483,13 @@ img.enc-pending {
   stroke: #7c8b82;
   stroke-width: 2.5;
 }
+.edge-line.sibling-edge {
+  stroke: #a69c8e;
+  stroke-dasharray: 5 4;
+}
+.edge-line.half-sibling-edge {
+  stroke-dasharray: 4 4;
+}
 .edge-line.highlight {
   stroke: var(--line-active);
   stroke-width: 2.5;
@@ -494,8 +509,8 @@ img.enc-pending {
 /* Person Card inside Graph */
 .t-node {
   position: absolute;
-  width: 220px;
-  height: 76px;
+  width: 232px;
+  height: 88px;
   background: var(--surface);
   border: 1.5px solid var(--border);
   border-radius: 10px;
@@ -519,6 +534,11 @@ img.enc-pending {
 }
 .t-node.female::before { background: var(--warm); }
 .t-node.unknown::before { background: #8f8b82; }
+.t-node.sibling-node {
+  background: #fcfbf8;
+  border-style: solid;
+  border-color: #d6cfc2;
+}
 .t-node:hover {
   border-color: #9ab5aa;
   box-shadow: 0 6px 16px rgba(31, 36, 33, 0.11);
@@ -565,20 +585,74 @@ img.enc-pending {
 .t-node-name {
   font-size: 12.5px;
   font-weight: 700;
-  line-height: 1.25;
+  line-height: 1.2;
   color: var(--text);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  padding-right: 14px;
+}
+.t-node.has-bio .t-node-name {
+  -webkit-line-clamp: 1;
 }
 .t-node-dates {
   font-size: 11px;
   color: var(--muted);
-  margin-top: 2px;
+  margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.t-node-bio {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  background: var(--surface-alt);
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+}
+.t-node-bio-ico {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.t-node-bio-txt {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.t-node-bio.bio-political {
+  background: #f9ecdf;
+  color: #8b3f16;
+  border: 1px solid #e8cbb1;
+}
+.t-node-bio.bio-military {
+  background: #e4efe9;
+  color: #214a3d;
+  border: 1px solid #c2dbcf;
+}
+.t-node-bio.bio-occupation {
+  background: #eef1f6;
+  color: #2f435d;
+  border: 1px solid #d4dde9;
+}
+.t-node-bio.bio-story {
+  background: #f3edf7;
+  color: #55356b;
+  border: 1px solid #dfd1ea;
+}
+.t-node-bio.bio-note {
+  background: #f7f3e3;
+  color: #6b541b;
+  border: 1px solid #e4d8b4;
 }
 .t-node-meta {
   display: flex;
@@ -586,10 +660,22 @@ img.enc-pending {
   gap: 5px;
   font-size: 10px;
   color: var(--muted);
-  margin-top: 1px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-half-tag {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted);
 }
 
-/* Clickable Parent & Child Expand/Contract Handles */
+/* Clickable Parent, Child & Sibling Expand/Contract Handles */
 .t-handle {
   position: absolute;
   left: 50%;
@@ -612,6 +698,7 @@ img.enc-pending {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   z-index: 8;
   transition: background 0.12s, color 0.12s, transform 0.12s;
+  white-space: nowrap;
 }
 .t-handle:hover {
   background: var(--accent);
@@ -630,13 +717,45 @@ img.enc-pending {
 .t-handle-top { top: -11px; }
 .t-handle-bottom { bottom: -11px; }
 
+.t-handle-sib {
+  bottom: -11px;
+  left: auto;
+  transform: none;
+  border-color: var(--warm);
+  color: var(--warm);
+  background: #fffdfb;
+  padding: 0 7px;
+}
+.t-handle-sib-left {
+  left: 8px;
+}
+.t-handle-sib-right {
+  right: 8px;
+}
+.t-handle-sib:hover {
+  background: var(--warm);
+  color: #fff;
+  transform: scale(1.06);
+}
+.t-handle-sib.expanded {
+  background: var(--warm-soft);
+  border-color: #d6a98f;
+  color: var(--warm);
+}
+.t-handle-sib.expanded:hover {
+  background: var(--warm);
+  color: #fff;
+}
+
 /* Floating Quick Inspector on Tree Canvas */
 .tree-inspector {
   position: absolute;
   left: 16px;
   bottom: 16px;
-  width: 320px;
+  width: 364px;
   max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
   background: rgba(255, 255, 255, 0.97);
   backdrop-filter: blur(6px);
   border: 1px solid var(--border);
@@ -675,6 +794,94 @@ img.enc-pending {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+.insp-bio {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--surface-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.insp-note {
+  background: #faf6e8;
+  border: 1px solid #e6d8b0;
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 12px;
+  color: #4f3e12;
+  line-height: 1.4;
+}
+.insp-bio-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.insp-bio-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.35;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+.insp-bio-item.bio-political {
+  background: #fdf2e8;
+  border: 1px solid #ebd0b9;
+  color: #6f310f;
+}
+.insp-bio-item.bio-military {
+  background: #e9f3ee;
+  border: 1px solid #c6dfd3;
+  color: #1e4538;
+}
+.insp-bio-item.bio-occupation {
+  background: #f0f3f8;
+  border: 1px solid #d6dfeb;
+  color: #2b3f59;
+}
+.insp-bio-ico {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.insp-bio-sub {
+  font-size: 11.5px;
+  opacity: 0.92;
+  margin-top: 2px;
+}
+.insp-stories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.insp-story-btn {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid #d9c8e6;
+  background: #f6f0fa;
+  color: #53316b;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.insp-story-btn:hover {
+  background: #ebdef5;
+  border-color: #bfa3d4;
+}
+.insp-lifestory {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #3f4541;
+  background: #faf9f6;
+  border: 1px solid var(--surface-alt);
+  border-radius: 7px;
+  padding: 7px 9px;
 }
 .insp-actions {
   display: flex;
@@ -1097,4 +1304,37 @@ img.enc-pending {
   display: inline-flex;
   align-items: center;
 }
+
+/* Profile Biographical Highlight Pills & Notes Card */
+.pill.bio-pill-political {
+  background: #f9ecdf;
+  color: #8b3f16;
+}
+.pill.bio-pill-military {
+  background: #e4efe9;
+  color: #214a3d;
+}
+.pill.bio-pill-occupation {
+  background: #eef1f6;
+  color: #2f435d;
+}
+button.pill.bio-pill-story {
+  border: 1px solid #d9c8e6;
+  background: #f6f0fa;
+  color: #53316b;
+  cursor: pointer;
+  font-family: inherit;
+}
+button.pill.bio-pill-story:hover {
+  background: #ebdef5;
+}
+.card-note {
+  background: #fdfaf0;
+  border-color: #e4d8b4;
+}
+.card-note h2 {
+  color: #7c5c16;
+  border-bottom-color: #efe4c4;
+}
+
 
