@@ -16,6 +16,7 @@ let expandedParents = new Set();
 let expandedDown = new Set();
 let expandedSiblings = new Set();
 let collapsedSiblings = new Set();
+let expandedExtraSpouses = new Set();
 let showAllSiblings = false;
 let panX = 0;
 let panY = 0;
@@ -337,6 +338,7 @@ function initTreeRoot(pid) {
   expandedDown = new Set();
   expandedSiblings = new Set();
   collapsedSiblings = new Set();
+  expandedExtraSpouses = new Set();
   lastNodePositions = new Map();
   treeNeedsInitialCenter = true;
 
@@ -681,6 +683,73 @@ function getPersonSiblings(pid, excludePids = null) {
   return out;
 }
 
+function toggleExtraSpousesFor(pid) {
+  if (expandedExtraSpouses.has(pid)) expandedExtraSpouses.delete(pid);
+  else expandedExtraSpouses.add(pid);
+}
+
+function getMarriageYear(pidA, pidB) {
+  const findYear = (p, targetId, targetName) => {
+    if (!p?.facts) return null;
+    for (const f of p.facts) {
+      if (f.type !== "Marriage") continue;
+      if (
+        (f.targetPersonId && f.targetPersonId === targetId) ||
+        (targetName && f.targetPersonName && f.targetPersonName === targetName)
+      ) {
+        if (f.parsedDate?.Year) return String(f.parsedDate.Year);
+        const m = String(f.date || f.sortDate || "").match(/\b(1[5-9]\d{2}|20\d{2})\b/);
+        if (m) return m[1];
+      }
+    }
+    return null;
+  };
+  const pA = DATA.people[pidA];
+  const pB = DATA.people[pidB];
+  return findYear(pA, pidB, pB?.name) || findYear(pB, pidA, pA?.name) || null;
+}
+
+function getMarriageTag(pidA, pidB) {
+  const yr = getMarriageYear(pidA, pidB);
+  return yr ? `m. ${yr}` : null;
+}
+
+function childHasParent(childPid, parentPid) {
+  const c = DATA.people[childPid];
+  if (!c) return false;
+  return (
+    (c.family.fathers || []).some((f) => f.id === parentPid) ||
+    (c.family.mothers || []).some((m) => m.id === parentPid)
+  );
+}
+
+function pickPrimarySpouse(pid, candidateSpouses) {
+  if (!candidateSpouses || !candidateSpouses.length) return null;
+  const p = DATA.people[pid];
+  const children = p?.family.children || [];
+  if (children.length > 0) {
+    for (const sp of candidateSpouses) {
+      if (children.some((c) => childHasParent(c.id, sp.id))) return sp;
+    }
+  }
+  return candidateSpouses[0];
+}
+
+function getPersonExtraSpouses(pid, excludePids = null) {
+  const p = DATA.people[pid];
+  if (!p) return [];
+  const seen = new Set([pid]);
+  const out = [];
+  for (const sp of p.family.spouses || []) {
+    if (!sp?.id || seen.has(sp.id)) continue;
+    if (excludePids && excludePids.has(sp.id)) continue;
+    if (!DATA.people[sp.id]) continue;
+    seen.add(sp.id);
+    out.push(sp);
+  }
+  return out;
+}
+
 /* ==================== Vertical Dynamic Family Graph ==================== */
 
 function collectAllAncestors(pid, seen = new Set()) {
@@ -707,7 +776,7 @@ function collectVisiblePrimaryAncPids(pid, out = new Set()) {
   return out;
 }
 
-function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null) {
+function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null, allowExtraSpouses = true) {
   const p = DATA.people[pid];
   if (!p) return null;
   const fatherId = p.family.fathers?.[0]?.id || null;
@@ -715,20 +784,26 @@ function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null) {
   const hasParents = Boolean(fatherId || motherId);
   const isExpanded = hasParents && expandedParents.has(pid);
 
+  const extraSpouseList = allowExtraSpouses ? getPersonExtraSpouses(pid, primaryPids) : [];
+  const extraSpouseCount = extraSpouseList.length;
+  const extraSpousesExpanded = extraSpouseCount > 0 && expandedExtraSpouses.has(pid);
+  const extraSpousesW = extraSpousesExpanded
+    ? extraSpouseCount * (CARD_W + COUPLE_GAP)
+    : 0;
+
   const sibList = getPersonSiblings(pid, primaryPids);
   const sibCount = sibList.length;
   const sibsExpanded = sibCount > 0 && isSiblingsExpanded(pid);
-  const sibStripW = sibsExpanded
-    ? (sibCount + 1) * CARD_W + sibCount * SIBLING_GAP
-    : CARD_W;
+  const sibsW = sibsExpanded ? sibCount * (CARD_W + SIBLING_GAP) : 0;
+  const rowStripW = CARD_W + extraSpousesW + sibsW;
 
   if (!isExpanded) {
     const defaultAnchorCx =
-      sibSide === "left" ? sibStripW - CARD_W / 2 : CARD_W / 2;
+      sibSide === "left" ? rowStripW - CARD_W / 2 : CARD_W / 2;
     return {
       pid,
       row,
-      width: sibStripW,
+      width: rowStripW,
       parentsW: 0,
       parentsAnchorRelX: 0,
       defaultAnchorCx,
@@ -741,12 +816,16 @@ function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null) {
       sibList,
       sibCount,
       sibsExpanded,
-      sibStripW,
+      sibStripW: rowStripW,
+      extraSpouseList,
+      extraSpouseCount,
+      extraSpousesExpanded,
+      extraSpousesW,
     };
   }
 
-  const fNode = fatherId ? buildAncSubtree(fatherId, row - 1, "left", primaryPids) : null;
-  const mNode = motherId ? buildAncSubtree(motherId, row - 1, "right", primaryPids) : null;
+  const fNode = fatherId ? buildAncSubtree(fatherId, row - 1, "left", primaryPids, true) : null;
+  const mNode = motherId ? buildAncSubtree(motherId, row - 1, "right", primaryPids, true) : null;
 
   let parentsW;
   let parentsAnchorRelX;
@@ -759,13 +838,13 @@ function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null) {
     parentsAnchorRelX = only.defaultAnchorCx;
   }
 
-  const width = Math.max(parentsW, sibStripW);
+  const width = Math.max(parentsW, rowStripW);
   let defaultAnchorCx;
-  if (sibsExpanded) {
-    const stripLeft = (width - sibStripW) / 2;
+  if (sibsExpanded || extraSpousesExpanded) {
+    const stripLeft = (width - rowStripW) / 2;
     defaultAnchorCx =
       sibSide === "left"
-        ? stripLeft + sibStripW - CARD_W / 2
+        ? stripLeft + rowStripW - CARD_W / 2
         : stripLeft + CARD_W / 2;
   } else {
     const parentsOffset = (width - parentsW) / 2;
@@ -788,7 +867,11 @@ function buildAncSubtree(pid, row, sibSide = "left", primaryPids = null) {
     sibList,
     sibCount,
     sibsExpanded,
-    sibStripW,
+    sibStripW: rowStripW,
+    extraSpouseList,
+    extraSpouseCount,
+    extraSpousesExpanded,
+    extraSpousesW,
   };
 }
 
@@ -797,8 +880,8 @@ function buildDescSubtree(pid, row, seenDown, isChildLevel = true) {
   if (!p || seenDown.has(pid)) return null;
   seenDown.add(pid);
 
-  const spouses = (p.family.spouses || []).filter((s) => !seenDown.has(s.id));
-  const children = (p.family.children || []).filter((c) => !seenDown.has(c.id));
+  const spouses = (p.family.spouses || []).filter((s) => !seenDown.has(s.id) && DATA.people[s.id]);
+  const children = (p.family.children || []).filter((c) => !seenDown.has(c.id) && DATA.people[c.id]);
   const hasDown = spouses.length > 0 || children.length > 0;
   const isExpanded = hasDown && expandedDown.has(pid);
 
@@ -807,6 +890,9 @@ function buildDescSubtree(pid, row, seenDown, isChildLevel = true) {
       pid,
       row,
       spousesShown: [],
+      extraSpouses: [],
+      extraSpousesExpanded: false,
+      extraSpousesW: 0,
       childNodes: [],
       unitW: CARD_W,
       width: CARD_W,
@@ -816,10 +902,21 @@ function buildDescSubtree(pid, row, seenDown, isChildLevel = true) {
     };
   }
 
-  const spousesShown = spouses.slice(0, 1);
+  const primarySp = pickPrimarySpouse(pid, spouses);
+  const spousesShown = primarySp ? [primarySp] : [];
   for (const sp of spousesShown) seenDown.add(sp.id);
 
-  const unitW = spousesShown.length ? 2 * CARD_W + COUPLE_GAP : CARD_W;
+  const extraSpouses = primarySp ? spouses.filter((s) => s.id !== primarySp.id) : [];
+  const extraSpousesExpanded = extraSpouses.length > 0 && expandedExtraSpouses.has(pid);
+  if (extraSpousesExpanded) {
+    for (const sp of extraSpouses) seenDown.add(sp.id);
+  }
+  const extraSpousesW = extraSpousesExpanded
+    ? extraSpouses.length * (CARD_W + COUPLE_GAP)
+    : 0;
+
+  const baseUnitW = spousesShown.length ? 2 * CARD_W + COUPLE_GAP : CARD_W;
+  const unitW = baseUnitW + extraSpousesW;
   const childNodes = children
     .map((c) => buildDescSubtree(c.id, row + 1, seenDown, true))
     .filter(Boolean);
@@ -832,6 +929,9 @@ function buildDescSubtree(pid, row, seenDown, isChildLevel = true) {
     pid,
     row,
     spousesShown,
+    extraSpouses,
+    extraSpousesExpanded,
+    extraSpousesW,
     childNodes,
     unitW,
     childrenW,
@@ -844,22 +944,91 @@ function buildDescSubtree(pid, row, seenDown, isChildLevel = true) {
 
 function computeFamilyLayout() {
   const nodes = new Map(); // pid -> node meta
-  const edges = []; // { type: 'couple'|'line', d?, x1?, y1?, x2?, y2?, midX?, midY?, pids: [], dashed?, sibling? }
+  const edges = []; // { type: 'couple'|'line', d?, x1?, y1?, x2?, y2?, midX?, midY?, pids: [], dashed?, sibling?, secondary?, label? }
 
   const rootP = DATA.people[treeRootPid];
-  const rootSpouses = rootP?.family.spouses || [];
-  const rootChildren = rootP?.family.children || [];
+  const rootSpouses = (rootP?.family.spouses || []).filter((s) => DATA.people[s.id]);
+  const rootChildren = (rootP?.family.children || []).filter((c) => DATA.people[c.id]);
   const rootHasDown = rootSpouses.length > 0 || rootChildren.length > 0;
   const rootShowDown = rootHasDown && expandedDown.has(treeRootPid);
+  const primaryRootSpouse = rootShowDown ? pickPrimarySpouse(treeRootPid, rootSpouses) : null;
 
-  // Collect all primary visible ancestor/root/spouse PIDs so sibling handles never duplicate visible primary nodes
+  // Collect primary visible ancestor/root/primary-spouse PIDs so sibling & extra-spouse handles never duplicate visible primary nodes
   const primaryPids = new Set();
   collectVisiblePrimaryAncPids(treeRootPid, primaryPids);
-  if (rootShowDown) {
-    for (const sp of rootSpouses) {
-      collectVisiblePrimaryAncPids(sp.id, primaryPids);
-    }
+  if (primaryRootSpouse) {
+    collectVisiblePrimaryAncPids(primaryRootSpouse.id, primaryPids);
   }
+
+  const placeExtraSpousesRow = (anchorPid, anchorCx, y, row, side, extraSpouseList) => {
+    const placed = [];
+    const midY = y + CARD_H / 2;
+    for (let i = 0; i < extraSpouseList.length; i++) {
+      const sp = extraSpouseList[i];
+      if (nodes.has(sp.id)) continue;
+      const spCx =
+        side === "left"
+          ? anchorCx - (i + 1) * (CARD_W + COUPLE_GAP)
+          : anchorCx + (i + 1) * (CARD_W + COUPLE_GAP);
+      const marriageLabel = getMarriageTag(anchorPid, sp.id);
+      nodes.set(sp.id, {
+        pid: sp.id,
+        x: spCx - CARD_W / 2,
+        y,
+        cx: spCx,
+        cy: midY,
+        row,
+        isRoot: false,
+        isSibling: false,
+        isHalfSibling: false,
+        isExtraSpouse: true,
+        spouseAnchorPid: anchorPid,
+        marriageLabel,
+        hasParents: false,
+        parentCount: 0,
+        parentsExpanded: false,
+        hasDown: false,
+        downCount: 0,
+        downExpanded: false,
+        canToggleDown: false,
+        sibCount: 0,
+        sibsExpanded: false,
+        sibSide: side,
+        extraSpouseCount: 0,
+        extraSpousesExpanded: false,
+        extraSpouseSide: side,
+      });
+
+      if (i === 0) {
+        const x1 = side === "left" ? spCx + CARD_W / 2 : anchorCx + CARD_W / 2;
+        const x2 = side === "left" ? anchorCx - CARD_W / 2 : spCx - CARD_W / 2;
+        const midX = (x1 + x2) / 2;
+        edges.push({
+          type: "couple",
+          secondary: true,
+          label: marriageLabel,
+          x1,
+          y1: midY,
+          x2,
+          y2: midY,
+          midX,
+          midY,
+          pids: [anchorPid, sp.id],
+        });
+        placed.push({ id: sp.id, cx: spCx, coupleMidX: midX, coupleOriginY: midY });
+      } else {
+        const railY = y + CARD_H + 14 + (i - 1) * 10;
+        edges.push({
+          type: "line",
+          secondaryCouple: true,
+          d: `M ${anchorCx} ${y + CARD_H} V ${railY} H ${spCx} V ${y + CARD_H}`,
+          pids: [anchorPid, sp.id],
+        });
+        placed.push({ id: sp.id, cx: spCx, coupleMidX: spCx, coupleOriginY: railY });
+      }
+    }
+    return placed;
+  };
 
   const placeAnc = (anc, leftX, forcedCardCx, isRootNode = false) => {
     const cardCx =
@@ -880,6 +1049,7 @@ function computeFamilyLayout() {
       isRoot: existing?.isRoot || isRootNode,
       isSibling: false,
       isHalfSibling: false,
+      isExtraSpouse: false,
       hasParents: anc.hasParents,
       parentCount: anc.parentCount,
       parentsExpanded: anc.isExpanded,
@@ -890,9 +1060,25 @@ function computeFamilyLayout() {
       sibCount: anc.sibCount,
       sibsExpanded: anc.sibsExpanded,
       sibSide: anc.sibSide,
+      extraSpouseCount: anc.extraSpouseCount,
+      extraSpousesExpanded: anc.extraSpousesExpanded,
+      extraSpouseSide: anc.sibSide,
     });
 
-    // Place expanded siblings alongside this node inside [leftX, leftX + anc.width]
+    // Place expanded extra spouses immediately adjacent to this person on anc.sibSide
+    let placedExtraSpouses = [];
+    if (anc.extraSpousesExpanded && anc.extraSpouseList.length > 0) {
+      placedExtraSpouses = placeExtraSpousesRow(
+        anc.pid,
+        cardCx,
+        y,
+        anc.row,
+        anc.sibSide,
+        anc.extraSpouseList
+      );
+    }
+
+    // Place expanded siblings beyond extra spouses inside [leftX, leftX + anc.width]
     const groupMembers = [{ pid: anc.pid, cx: cardCx, isHalf: false }];
     if (anc.sibsExpanded && anc.sibList.length > 0) {
       const k = anc.sibList.length;
@@ -901,8 +1087,8 @@ function computeFamilyLayout() {
         if (nodes.has(sib.id)) continue;
         const sCx =
           anc.sibSide === "left"
-            ? cardCx - (k - i) * (CARD_W + SIBLING_GAP)
-            : cardCx + (i + 1) * (CARD_W + SIBLING_GAP);
+            ? cardCx - anc.extraSpousesW - (k - i) * (CARD_W + SIBLING_GAP)
+            : cardCx + anc.extraSpousesW + (i + 1) * (CARD_W + SIBLING_GAP);
         nodes.set(sib.id, {
           pid: sib.id,
           x: sCx - CARD_W / 2,
@@ -913,6 +1099,7 @@ function computeFamilyLayout() {
           isRoot: false,
           isSibling: true,
           isHalfSibling: sib.isHalf,
+          isExtraSpouse: false,
           siblingAnchorPid: anc.pid,
           hasParents: false,
           parentCount: 0,
@@ -924,6 +1111,9 @@ function computeFamilyLayout() {
           sibCount: 0,
           sibsExpanded: false,
           sibSide: anc.sibSide,
+          extraSpouseCount: 0,
+          extraSpousesExpanded: false,
+          extraSpouseSide: anc.sibSide,
         });
         groupMembers.push({ pid: sib.id, cx: sCx, isHalf: sib.isHalf });
       }
@@ -954,7 +1144,7 @@ function computeFamilyLayout() {
           });
         }
       }
-      return;
+      return placedExtraSpouses;
     }
 
     // Center parents above the sibling group, clamped strictly inside [leftX, leftX + anc.width]
@@ -1038,14 +1228,24 @@ function computeFamilyLayout() {
         });
       }
     }
+    return placedExtraSpouses;
   };
 
-  const placeDescChildren = (parentMidX, parentOriginY, parentPids, childNodes, row) => {
+  const placeDescChildrenAt = (
+    parentMidX,
+    parentOriginY,
+    parentPids,
+    childNodes,
+    row,
+    startX = null,
+    busYOffset = 0,
+    secondaryEdges = false
+  ) => {
     if (!childNodes || !childNodes.length) return;
     const totalW =
       childNodes.reduce((acc, cn) => acc + cn.width, 0) + SIBLING_GAP * (childNodes.length - 1);
-    let curX = parentMidX - totalW / 2;
-    const busY = row * ROW_H + CARD_H + 36;
+    let curX = startX !== null ? startX : parentMidX - totalW / 2;
+    const busY = row * ROW_H + CARD_H + 36 + busYOffset;
     const childTopY = (row + 1) * ROW_H;
     const childCxs = [];
 
@@ -1056,8 +1256,10 @@ function computeFamilyLayout() {
       let cOriginY = childTopY + CARD_H;
 
       if (cn.spousesShown.length > 0) {
-        cCx = childMidX - COUPLE_GAP / 2 - CARD_W / 2;
-        const spCx = childMidX + COUPLE_GAP / 2 + CARD_W / 2;
+        const unitLeft = childMidX - cn.unitW / 2;
+        cCx = unitLeft + cn.extraSpousesW + CARD_W / 2;
+        const spCx = cCx + CARD_W + COUPLE_GAP;
+        coupleMidX = (cCx + spCx) / 2;
         const spId = cn.spousesShown[0].id;
 
         nodes.set(cn.pid, {
@@ -1070,6 +1272,7 @@ function computeFamilyLayout() {
           isRoot: false,
           isSibling: false,
           isHalfSibling: false,
+          isExtraSpouse: false,
           hasParents: false,
           parentCount: 0,
           parentsExpanded: false,
@@ -1080,6 +1283,9 @@ function computeFamilyLayout() {
           sibCount: 0,
           sibsExpanded: false,
           sibSide: "left",
+          extraSpouseCount: cn.extraSpouses.length,
+          extraSpousesExpanded: cn.extraSpousesExpanded,
+          extraSpouseSide: "left",
         });
 
         nodes.set(spId, {
@@ -1092,6 +1298,7 @@ function computeFamilyLayout() {
           isRoot: false,
           isSibling: false,
           isHalfSibling: false,
+          isExtraSpouse: false,
           hasParents: false,
           parentCount: 0,
           parentsExpanded: false,
@@ -1102,7 +1309,14 @@ function computeFamilyLayout() {
           sibCount: 0,
           sibsExpanded: false,
           sibSide: "right",
+          extraSpouseCount: 0,
+          extraSpousesExpanded: false,
+          extraSpouseSide: "right",
         });
+
+        if (cn.extraSpousesExpanded && cn.extraSpouses.length > 0) {
+          placeExtraSpousesRow(cn.pid, cCx, childTopY, row + 1, "left", cn.extraSpouses);
+        }
 
         edges.push({
           type: "couple",
@@ -1126,6 +1340,7 @@ function computeFamilyLayout() {
           isRoot: false,
           isSibling: false,
           isHalfSibling: false,
+          isExtraSpouse: false,
           hasParents: false,
           parentCount: 0,
           parentsExpanded: false,
@@ -1136,13 +1351,16 @@ function computeFamilyLayout() {
           sibCount: 0,
           sibsExpanded: false,
           sibSide: "left",
+          extraSpouseCount: 0,
+          extraSpousesExpanded: false,
+          extraSpouseSide: "left",
         });
       }
 
       childCxs.push({ cx: cCx, pid: cn.pid });
       if (cn.isExpanded && cn.childNodes.length) {
         const nextPids = cn.spousesShown.length ? [cn.pid, cn.spousesShown[0].id] : [cn.pid];
-        placeDescChildren(coupleMidX, cOriginY, nextPids, cn.childNodes, row + 1);
+        placeDescChildrenAt(coupleMidX, cOriginY, nextPids, cn.childNodes, row + 1);
       }
       curX += cn.width + SIBLING_GAP;
     }
@@ -1150,12 +1368,14 @@ function computeFamilyLayout() {
     // Stem from parent down to sibling bus
     edges.push({
       type: "line",
+      secondaryCouple: secondaryEdges,
       d: `M ${parentMidX} ${parentOriginY} V ${busY}`,
       pids: parentPids,
     });
     if (childCxs.length === 1 && Math.abs(childCxs[0].cx - parentMidX) < 1) {
       edges.push({
         type: "line",
+        secondaryCouple: secondaryEdges,
         d: `M ${parentMidX} ${busY} V ${childTopY}`,
         pids: [...parentPids, childCxs[0].pid],
       });
@@ -1164,12 +1384,14 @@ function computeFamilyLayout() {
       const maxX = Math.max(parentMidX, ...childCxs.map((c) => c.cx));
       edges.push({
         type: "line",
+        secondaryCouple: secondaryEdges,
         d: `M ${minX} ${busY} H ${maxX}`,
         pids: parentPids,
       });
       for (const c of childCxs) {
         edges.push({
           type: "line",
+          secondaryCouple: secondaryEdges,
           d: `M ${c.cx} ${busY} V ${childTopY}`,
           pids: [...parentPids, c.pid],
         });
@@ -1177,10 +1399,10 @@ function computeFamilyLayout() {
     }
   };
 
-  const rootSibSide = rootShowDown && rootSpouses.length > 0 ? "left" : "right";
-  const rootAnc = buildAncSubtree(treeRootPid, 0, rootSibSide, primaryPids);
+  const rootSibSide = rootShowDown && primaryRootSpouse ? "left" : "right";
+  const rootAnc = buildAncSubtree(treeRootPid, 0, rootSibSide, primaryPids, rootShowDown);
 
-  if (!rootShowDown || rootSpouses.length === 0) {
+  if (!rootShowDown || !primaryRootSpouse) {
     placeAnc(rootAnc, 0, null, true);
     const rNode = nodes.get(treeRootPid);
     rNode.hasDown = rootHasDown;
@@ -1193,21 +1415,21 @@ function computeFamilyLayout() {
       const childNodes = rootChildren
         .map((c) => buildDescSubtree(c.id, 1, seenDown, true))
         .filter(Boolean);
-      placeDescChildren(rNode.cx, CARD_H, [treeRootPid], childNodes, 0);
+      placeDescChildrenAt(rNode.cx, CARD_H, [treeRootPid], childNodes, 0);
     }
-  } else if (rootSpouses.length === 1) {
-    const spId = rootSpouses[0].id;
-    const spAnc = buildAncSubtree(spId, 0, "right", primaryPids);
+  } else {
+    const spId = primaryRootSpouse.id;
+    const spAnc = buildAncSubtree(spId, 0, "right", primaryPids, true);
     const coupleMidX = rootAnc.width + COUPLE_GAP / 2;
     const rootCardCx = coupleMidX - COUPLE_GAP / 2 - CARD_W / 2;
     const spCardCx = coupleMidX + COUPLE_GAP / 2 + CARD_W / 2;
 
-    placeAnc(rootAnc, 0, rootCardCx, true);
+    const placedRootExtraSpouses = placeAnc(rootAnc, 0, rootCardCx, true) || [];
     placeAnc(spAnc, rootAnc.width + COUPLE_GAP, spCardCx, false);
 
     const rNode = nodes.get(treeRootPid);
     rNode.hasDown = rootHasDown;
-    rNode.downCount = rootChildren.length || 1;
+    rNode.downCount = rootChildren.length || rootSpouses.length;
     rNode.downExpanded = true;
     rNode.canToggleDown = true;
 
@@ -1223,60 +1445,85 @@ function computeFamilyLayout() {
     });
 
     if (rootChildren.length > 0) {
-      const seenDown = new Set([treeRootPid, spId]);
-      const childNodes = rootChildren
-        .map((c) => buildDescSubtree(c.id, 1, seenDown, true))
-        .filter(Boolean);
-      placeDescChildren(coupleMidX, CARD_H / 2, [treeRootPid, spId], childNodes, 0);
-    }
-  } else {
-    // Multiple spouses for root (rare, e.g. 2 spouses)
-    const rootCardCx = rootAnc.width - CARD_W / 2;
-    placeAnc(rootAnc, 0, rootCardCx, true);
-    const rNode = nodes.get(treeRootPid);
-    rNode.hasDown = rootHasDown;
-    rNode.downCount = rootChildren.length || rootSpouses.length;
-    rNode.downExpanded = true;
-    rNode.canToggleDown = true;
+      const seenDown = new Set([
+        treeRootPid,
+        spId,
+        ...placedRootExtraSpouses.map((s) => s.id),
+      ]);
 
-    let cursorX = rootAnc.width + COUPLE_GAP;
-    const spouseCenters = [];
-    const seenDown = new Set([treeRootPid]);
+      // Group root's children by expanded extra spouse (left-to-right) + primary couple so parentage is unambiguous
+      const groups = [];
+      const assignedChildIds = new Set();
 
-    for (const sp of rootSpouses) {
-      seenDown.add(sp.id);
-      const spAnc = buildAncSubtree(sp.id, 0, "right", primaryPids);
-      const spCx = cursorX + CARD_W / 2;
-      placeAnc(spAnc, cursorX, spCx, false);
-      spouseCenters.push({ id: sp.id, cx: spCx });
-      cursorX += Math.max(CARD_W, spAnc.width) + COUPLE_GAP;
-    }
+      // Left-side extra spouses ordered left-to-right (furthest left first)
+      const leftExtraOrdered = [...placedRootExtraSpouses].reverse();
+      for (const esp of leftExtraOrdered) {
+        const espKids = rootChildren.filter(
+          (c) =>
+            !assignedChildIds.has(c.id) &&
+            childHasParent(c.id, esp.id) &&
+            !childHasParent(c.id, spId)
+        );
+        if (espKids.length > 0) {
+          const cNodes = espKids
+            .map((c) => buildDescSubtree(c.id, 1, seenDown, true))
+            .filter(Boolean);
+          if (cNodes.length > 0) {
+            for (const c of espKids) assignedChildIds.add(c.id);
+            groups.push({
+              parentMidX: esp.coupleMidX,
+              parentOriginY: esp.coupleOriginY,
+              parentPids: [treeRootPid, esp.id],
+              childNodes: cNodes,
+              secondary: true,
+            });
+          }
+        }
+      }
 
-    if (spouseCenters.length > 0) {
-      const firstSp = spouseCenters[0];
-      const coupleMidX = (rootCardCx + firstSp.cx) / 2;
-      edges.push({
-        type: "couple",
-        x1: rootCardCx + CARD_W / 2,
-        y1: CARD_H / 2,
-        x2: spouseCenters[spouseCenters.length - 1].cx - CARD_W / 2,
-        y2: CARD_H / 2,
-        midX: coupleMidX,
-        midY: CARD_H / 2,
-        pids: [treeRootPid, ...spouseCenters.map((s) => s.id)],
-      });
-
-      if (rootChildren.length > 0) {
-        const childNodes = rootChildren
+      const primaryKids = rootChildren.filter((c) => !assignedChildIds.has(c.id));
+      if (primaryKids.length > 0) {
+        const cNodes = primaryKids
           .map((c) => buildDescSubtree(c.id, 1, seenDown, true))
           .filter(Boolean);
-        placeDescChildren(
-          coupleMidX,
-          CARD_H / 2,
-          [treeRootPid, ...spouseCenters.map((s) => s.id)],
-          childNodes,
-          0
+        if (cNodes.length > 0) {
+          groups.push({
+            parentMidX: coupleMidX,
+            parentOriginY: CARD_H / 2,
+            parentPids: [treeRootPid, spId],
+            childNodes: cNodes,
+            secondary: false,
+          });
+        }
+      }
+
+      if (groups.length === 1) {
+        const g = groups[0];
+        placeDescChildrenAt(g.parentMidX, g.parentOriginY, g.parentPids, g.childNodes, 0, null, 0, g.secondary);
+      } else if (groups.length > 1) {
+        const GROUP_GAP = SIBLING_GAP + 18;
+        const groupWidths = groups.map(
+          (g) =>
+            g.childNodes.reduce((acc, cn) => acc + cn.width, 0) +
+            SIBLING_GAP * (g.childNodes.length - 1)
         );
+        const allW =
+          groupWidths.reduce((a, b) => a + b, 0) + GROUP_GAP * (groups.length - 1);
+        const anchorMid = (groups[0].parentMidX + groups[groups.length - 1].parentMidX) / 2;
+        let gx = anchorMid - allW / 2;
+        groups.forEach((g, idx) => {
+          placeDescChildrenAt(
+            g.parentMidX,
+            g.parentOriginY,
+            g.parentPids,
+            g.childNodes,
+            0,
+            gx,
+            g.secondary ? -6 : 6,
+            g.secondary
+          );
+          gx += groupWidths[idx] + GROUP_GAP;
+        });
       }
     }
   }
@@ -1326,7 +1573,7 @@ function renderPedigreeView(container) {
         <div class="tree-nodes" id="treeNodes"></div>
       </div>
       <div class="tree-inspector hidden" id="treeInspector"></div>
-      <div class="insp-hint">Drag canvas to pan · Scroll to zoom · Click ▲ / ▼ / + sibs on cards to expand family</div>
+      <div class="insp-hint">Drag canvas to pan · Scroll to zoom · Click ▲ / ▼ / + sibs / ♥ spouse on cards to expand family</div>
     </div>
   `;
 
@@ -1369,6 +1616,7 @@ function bindTreeToolbar(rootP) {
     expandedDown.clear();
     expandedSiblings.clear();
     collapsedSiblings.clear();
+    expandedExtraSpouses.clear();
     showAllSiblings = false;
     updateSiblingsToggleButton();
     renderTreeGraph(null);
@@ -1582,15 +1830,22 @@ function renderTreeGraph(anchorPid = null) {
         ed.pids?.includes(selectedTreePid) &&
         ed.pids.some((id) => id !== selectedTreePid && activeSet.has(id));
       if (ed.type === "couple") {
+        const secCls = ed.secondary ? "secondary-couple-bar" : "";
+        const jointSecCls = ed.secondary ? "secondary-couple-joint" : "";
+        const labelSvg = ed.label
+          ? `<text class="couple-label ${isHi ? "highlight" : ""}" x="${ed.midX}" y="${ed.midY - 10}" text-anchor="middle">${esc(ed.label)}</text>`
+          : "";
         return `
-          <line class="edge-line couple-bar ${isHi ? "highlight" : ""}" x1="${ed.x1}" y1="${ed.y1}" x2="${ed.x2}" y2="${ed.y2}" />
-          <circle class="couple-joint" cx="${ed.midX}" cy="${ed.midY}" r="4.5" />
+          <line class="edge-line couple-bar ${secCls} ${isHi ? "highlight" : ""}" x1="${ed.x1}" y1="${ed.y1}" x2="${ed.x2}" y2="${ed.y2}" />
+          <circle class="couple-joint ${jointSecCls}" cx="${ed.midX}" cy="${ed.midY}" r="4.5" />
+          ${labelSvg}
         `;
       }
       const cls = [
         "edge-line",
         ed.sibling ? "sibling-edge" : "",
         ed.dashed ? "half-sibling-edge" : "",
+        ed.secondaryCouple ? "secondary-couple-bar" : "",
         isHi ? "highlight" : "",
       ]
         .filter(Boolean)
@@ -1611,6 +1866,9 @@ function renderTreeGraph(anchorPid = null) {
     const selCls = n.pid === selectedTreePid ? "selected" : "";
     const rootCls = n.isRoot ? "root-node" : "";
     const sibCls = n.isSibling ? "sibling-node" : "";
+    const extraSpCls = n.isExtraSpouse ? "extra-spouse-node" : "";
+    const rightSpHandleCls =
+      n.extraSpouseCount > 0 && n.extraSpouseSide === "right" ? "has-spouse-right" : "";
     const bio = getBioHighlights(p);
     const bioCls = bio.hasRichBio ? "has-bio" : "";
 
@@ -1646,8 +1904,21 @@ function renderTreeGraph(anchorPid = null) {
           }">${n.sibsExpanded ? `− ${sibLabel}` : `+ ${sibLabel}`}</button>`
         : "";
 
+    const spouseLabel = n.extraSpouseCount === 1 ? "1 spouse" : `${n.extraSpouseCount} spouses`;
+    const spouseHandleSideCls =
+      n.extraSpouseSide === "left" ? "t-handle-spouse-left" : "t-handle-spouse-right";
+    const spouseHandle =
+      n.extraSpouseCount > 0
+        ? `<button class="t-handle t-handle-spouse ${spouseHandleSideCls} ${n.extraSpousesExpanded ? "expanded" : ""}" data-handle-spouse="${esc(n.pid)}" title="${
+            n.extraSpousesExpanded ? `Hide ${spouseLabel}` : `Show ${spouseLabel}`
+          }">${n.extraSpousesExpanded ? `♥ −${spouseLabel}` : `♥ +${spouseLabel}`}</button>`
+        : "";
+
     const metaBits = [];
     if (n.isHalfSibling) metaBits.push(`<span class="t-half-tag">Half-sib</span>`);
+    if (n.isExtraSpouse) {
+      metaBits.push(`<span class="t-spouse-tag">♥ ${esc(n.marriageLabel || "Spouse")}</span>`);
+    }
     if (p.mediaIds?.length) metaBits.push(`📷 ${p.mediaIds.length}`);
     if (p.sources?.length) metaBits.push(`📚 ${p.sources.length}`);
     if (bio.stories.length && bio.cardTagline?.kind !== "story") metaBits.push(`📖 ${bio.stories.length}`);
@@ -1660,8 +1931,9 @@ function renderTreeGraph(anchorPid = null) {
       : "";
 
     cardsHtml.push(`
-      <div class="t-node ${genderCls} ${selCls} ${rootCls} ${sibCls} ${bioCls}" data-node-pid="${esc(n.pid)}" style="left:${n.x}px;top:${n.y}px">
+      <div class="t-node ${genderCls} ${selCls} ${rootCls} ${sibCls} ${extraSpCls} ${rightSpHandleCls} ${bioCls}" data-node-pid="${esc(n.pid)}" style="left:${n.x}px;top:${n.y}px">
         ${topHandle}
+        ${spouseHandle}
         <button class="t-node-fb" data-node-fb="${esc(n.pid)}" title="Send feedback about ${esc(p.name)}" aria-label="Send feedback about ${esc(p.name)}">✉</button>
         <div class="tree-avatar">${avatarInner}</div>
         <div class="t-node-body">
@@ -1721,6 +1993,16 @@ function renderTreeGraph(anchorPid = null) {
       e.stopPropagation();
       const pid = btn.dataset.handleSib;
       toggleSiblingsFor(pid);
+      renderTreeGraph(pid);
+    });
+  });
+
+  nodesEl.querySelectorAll("[data-handle-spouse]").forEach((btn) => {
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pid = btn.dataset.handleSpouse;
+      toggleExtraSpousesFor(pid);
       renderTreeGraph(pid);
     });
   });
@@ -1798,7 +2080,10 @@ function renderTreeInspector(layoutNodes = null) {
 
   const relButtons = [
     ...parents.map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↑ ${esc(m.name)}</button>`),
-    ...spouses.map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">♥ ${esc(m.name)}</button>`),
+    ...spouses.map((m) => {
+      const mTag = getMarriageTag(p.id, m.id);
+      return `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">♥ ${esc(m.name)}${mTag ? ` (${esc(mTag)})` : ""}</button>`;
+    }),
     ...children.slice(0, 5).map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↓ ${esc(m.name)}</button>`),
     ...siblings.slice(0, 6).map((m) => `<button class="ped-mini-btn" data-insp-root="${esc(m.id)}">↔ ${esc(m.name)}</button>`),
   ].join("");
@@ -1848,6 +2133,11 @@ function renderTreeInspector(layoutNodes = null) {
     ? `Hide ${layoutNode.sibCount} ${layoutNode.sibCount === 1 ? "Sibling" : "Siblings"}`
     : `+ ${layoutNode?.sibCount} ${layoutNode?.sibCount === 1 ? "Sibling" : "Siblings"}`;
 
+  const canToggleSpouseInInsp = layoutNode && layoutNode.extraSpouseCount > 0;
+  const spouseBtnLabel = layoutNode?.extraSpousesExpanded
+    ? `Hide ${layoutNode.extraSpouseCount === 1 ? "Other Spouse" : `${layoutNode.extraSpouseCount} Other Spouses`}`
+    : `♥ +${layoutNode?.extraSpouseCount} ${layoutNode?.extraSpouseCount === 1 ? "Spouse" : "Spouses"}`;
+
   insp.innerHTML = `
     <div class="insp-head">
       ${renderAvatar(p, "avatar-sm")}
@@ -1874,6 +2164,11 @@ function renderTreeInspector(layoutNodes = null) {
           ? `<button class="btn ${layoutNode.sibsExpanded ? "active-toggle" : ""}" id="inspToggleSibBtn">${esc(sibBtnLabel)}</button>`
           : ""
       }
+      ${
+        canToggleSpouseInInsp
+          ? `<button class="btn ${layoutNode.extraSpousesExpanded ? "active-spouse-toggle" : ""}" id="inspToggleSpouseBtn">${esc(spouseBtnLabel)}</button>`
+          : ""
+      }
       <button class="btn" id="inspFeedbackBtn" title="Send a correction, story, or note">✉ Feedback</button>
     </div>
     ${relButtons ? `<div class="insp-links">${relButtons}</div>` : ""}
@@ -1895,6 +2190,11 @@ function renderTreeInspector(layoutNodes = null) {
 
   document.getElementById("inspToggleSibBtn")?.addEventListener("click", () => {
     toggleSiblingsFor(p.id);
+    renderTreeGraph(p.id);
+  });
+
+  document.getElementById("inspToggleSpouseBtn")?.addEventListener("click", () => {
+    toggleExtraSpousesFor(p.id);
     renderTreeGraph(p.id);
   });
 
@@ -1990,13 +2290,15 @@ function renderProfile(container, p) {
         <div class="fam-label">${esc(label)}</div>
         <div class="fam-links">
           ${arr
-            .map(
-              (m) => `
+            .map((m) => {
+              const mTag = label === "Spouses" ? getMarriageTag(p.id, m.id) : null;
+              const sub = [m.lifeRange, mTag].filter(Boolean).join(" · ");
+              return `
               <button class="link-btn" data-jump="${esc(m.id)}">
                 <span>${esc(m.name)}</span>
-                <small>${esc(m.lifeRange || "")}</small>
-              </button>`
-            )
+                <small>${esc(sub)}</small>
+              </button>`;
+            })
             .join("")}
         </div>
       </div>`

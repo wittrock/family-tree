@@ -385,6 +385,14 @@ img.enc-pending {
 .btn.active-toggle:hover {
   background: #eedbd0;
 }
+.btn.active-spouse-toggle {
+  background: #f9eaf0;
+  color: #8e3b57;
+  border-color: #d9a7b8;
+}
+.btn.active-spouse-toggle:hover {
+  background: #f2dbe4;
+}
 .btn-sm {
   padding: 4px 9px;
   font-size: 11px;
@@ -490,6 +498,10 @@ img.enc-pending {
 .edge-line.half-sibling-edge {
   stroke-dasharray: 4 4;
 }
+.edge-line.secondary-couple-bar {
+  stroke: #a65b73;
+  stroke-dasharray: 5 4;
+}
 .edge-line.highlight {
   stroke: var(--line-active);
   stroke-width: 2.5;
@@ -498,6 +510,22 @@ img.enc-pending {
   fill: var(--surface);
   stroke: #7c8b82;
   stroke-width: 2;
+}
+.couple-joint.secondary-couple-joint {
+  fill: #fdf4f6;
+  stroke: #a65b73;
+}
+.couple-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: #8e3b57;
+  paint-order: stroke;
+  stroke: #f3f0e8;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.couple-label.highlight {
+  fill: var(--accent);
 }
 
 .tree-nodes {
@@ -538,6 +566,13 @@ img.enc-pending {
   background: #fcfbf8;
   border-style: solid;
   border-color: #d6cfc2;
+}
+.t-node.extra-spouse-node {
+  background: #fdf9fa;
+  border-color: #dec2cc;
+}
+.t-node.has-spouse-right .t-node-fb {
+  top: 12px;
 }
 .t-node:hover {
   border-color: #9ab5aa;
@@ -674,8 +709,17 @@ img.enc-pending {
   font-weight: 600;
   color: var(--muted);
 }
+.t-spouse-tag {
+  background: #f9eaf0;
+  border: 1px solid #e2beca;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #8e3b57;
+}
 
-/* Clickable Parent, Child & Sibling Expand/Contract Handles */
+/* Clickable Parent, Child, Sibling & Spouse Expand/Contract Handles */
 .t-handle {
   position: absolute;
   left: 50%;
@@ -744,6 +788,36 @@ img.enc-pending {
 }
 .t-handle-sib.expanded:hover {
   background: var(--warm);
+  color: #fff;
+}
+
+.t-handle-spouse {
+  top: -11px;
+  left: auto;
+  transform: none;
+  border-color: #9b4360;
+  color: #8e3b57;
+  background: #fffcfd;
+  padding: 0 7px;
+}
+.t-handle-spouse-left {
+  left: 8px;
+}
+.t-handle-spouse-right {
+  right: 8px;
+}
+.t-handle-spouse:hover {
+  background: #9b4360;
+  color: #fff;
+  transform: scale(1.06);
+}
+.t-handle-spouse.expanded {
+  background: #f9eaf0;
+  border-color: #d9a7b8;
+  color: #8e3b57;
+}
+.t-handle-spouse.expanded:hover {
+  background: #9b4360;
   color: #fff;
 }
 
