@@ -108,7 +108,7 @@
       </div>
       <div class="modal-body">
         <div class="fb-person-banner" id="fbPersonBanner"></div>
-        <div class="fb-form">
+        <form class="fb-form" id="fbForm" novalidate>
           <label class="fb-field">
             <span>Feedback Type</span>
             <select id="fbTopic">
@@ -119,21 +119,41 @@
               <option value="Other Feedback">Other Feedback</option>
             </select>
           </label>
-          <label class="fb-field">
-            <span>Your Name (optional)</span>
-            <input type="text" id="fbSenderName" placeholder="e.g. Cousin Sarah" />
-          </label>
+          <div class="fb-row">
+            <label class="fb-field">
+              <span>Your Name (optional)</span>
+              <input type="text" id="fbSenderName" placeholder="e.g. Cousin Sarah" autocomplete="name" />
+            </label>
+            <label class="fb-field">
+              <span>Your Email (optional, for replies)</span>
+              <input type="email" id="fbSenderEmail" placeholder="e.g. sarah@example.com" autocomplete="email" />
+            </label>
+          </div>
           <label class="fb-field">
             <span>Details / Notes</span>
             <textarea id="fbMessage" rows="5" placeholder="Share a correction, story, date, or question about this person…"></textarea>
           </label>
+          <div class="fb-field hidden" id="fbUploadGroup">
+            <span>Attach Photo or Document (optional)</span>
+            <label class="fb-upload-box" id="fbUploadBox" for="fbFiles">
+              <input type="file" id="fbFiles" accept="image/*,.pdf" multiple class="fb-file-input" />
+              <span class="fb-upload-label">📎 Choose photos or PDFs, or drop them here</span>
+              <span class="fb-upload-hint">Up to 3 files · 8 MB max per file</span>
+            </label>
+            <div class="fb-file-list" id="fbFileList"></div>
+          </div>
+          <div class="fb-status hidden" id="fbStatus" role="status" aria-live="polite"></div>
           <div class="fb-recipient-note" id="fbRecipientNote"></div>
-          <div class="fb-actions">
+          <div class="fb-actions" id="fbDirectActions">
+            <button type="submit" id="fbSubmitBtn" class="btn primary">Send Feedback</button>
+          </div>
+          <div class="fb-actions" id="fbFallbackActions">
+            <span class="fb-fallback-prefix hidden" id="fbFallbackPrefix">Or send manually:</span>
             <a id="fbMailtoBtn" class="btn primary" href="mailto:">✉ Open Email App</a>
             <a id="fbGmailBtn" class="btn" href="https://mail.google.com/" target="_blank" rel="noopener">Open in Gmail</a>
             <button type="button" id="fbCopyBtn" class="btn">Copy Message</button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   </div>

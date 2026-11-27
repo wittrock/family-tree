@@ -2542,19 +2542,38 @@ function renderAllSources(container) {
 /* ==================== Node Feedback Modal ==================== */
 
 let feedbackPid = null;
+let feedbackFiles = [];
+let feedbackSubmitting = false;
+
+const FB_MAX_FILES = 3;
+const FB_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const FB_MAX_TOTAL_BYTES = 15 * 1024 * 1024;
+
+function hasDirectFeedbackEndpoint() {
+  return Boolean(DATA?.tree?.feedbackEndpoint && String(DATA.tree.feedbackEndpoint).trim());
+}
 
 function bindFeedbackControls() {
   document.getElementById("fbModalClose").addEventListener("click", closeFeedbackModal);
   document.getElementById("feedbackModal").addEventListener("click", (e) => {
     if (e.target.id === "feedbackModal") closeFeedbackModal();
   });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !document.getElementById("feedbackModal").classList.contains("hidden")) {
+      closeFeedbackModal();
+    }
+  });
 
-  for (const id of ["fbTopic", "fbSenderName", "fbMessage"]) {
+  for (const id of ["fbTopic", "fbSenderName", "fbSenderEmail", "fbMessage"]) {
     const el = document.getElementById(id);
     const handler = () => {
       if (id === "fbSenderName") {
         try {
           localStorage.setItem("ancestry_fb_name", el.value);
+        } catch {}
+      } else if (id === "fbSenderEmail") {
+        try {
+          localStorage.setItem("ancestry_fb_email", el.value);
         } catch {}
       }
       updateFeedbackLinks();
@@ -2563,10 +2582,40 @@ function bindFeedbackControls() {
     el.addEventListener("change", handler);
   }
 
+  const fileInput = document.getElementById("fbFiles");
+  const uploadBox = document.getElementById("fbUploadBox");
+  fileInput.addEventListener("change", () => {
+    addFeedbackFiles(fileInput.files);
+    fileInput.value = "";
+  });
+
+  uploadBox.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    uploadBox.classList.add("dragover");
+  });
+  uploadBox.addEventListener("dragleave", () => {
+    uploadBox.classList.remove("dragover");
+  });
+  uploadBox.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadBox.classList.remove("dragover");
+    if (e.dataTransfer?.files?.length) {
+      addFeedbackFiles(e.dataTransfer.files);
+    }
+  });
+
+  document.getElementById("fbForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (hasDirectFeedbackEndpoint()) {
+      submitFeedbackDirect();
+    }
+  });
+
   document.getElementById("fbCopyBtn").addEventListener("click", async () => {
     const { to, subject, body } = buildFeedbackEmailContent();
     const text = `${to ? `To: ${to}\n` : ""}Subject: ${subject}\n\n${body}`;
     const btn = document.getElementById("fbCopyBtn");
+    const defaultLabel = hasDirectFeedbackEndpoint() ? "Copy" : "Copy Message";
     try {
       await navigator.clipboard.writeText(text);
       btn.textContent = "✓ Copied!";
@@ -2574,15 +2623,108 @@ function bindFeedbackControls() {
       btn.textContent = "Copy failed";
     }
     setTimeout(() => {
-      btn.textContent = "Copy Message";
+      btn.textContent = defaultLabel;
     }, 2000);
   });
+}
+
+function formatByteSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function addFeedbackFiles(fileList) {
+  const incoming = Array.from(fileList || []);
+  if (!incoming.length) return;
+
+  const warnings = [];
+  for (const file of incoming) {
+    if (feedbackFiles.length >= FB_MAX_FILES) {
+      warnings.push(`Up to ${FB_MAX_FILES} files can be attached per submission.`);
+      break;
+    }
+    if (file.size > FB_MAX_FILE_BYTES) {
+      warnings.push(`"${file.name}" exceeds the 8 MB per-file limit.`);
+      continue;
+    }
+    const currentTotal = feedbackFiles.reduce((sum, f) => sum + f.size, 0);
+    if (currentTotal + file.size > FB_MAX_TOTAL_BYTES) {
+      warnings.push(`Adding "${file.name}" exceeds the 15 MB total upload limit.`);
+      continue;
+    }
+    const duplicate = feedbackFiles.some(
+      (f) => f.name === file.name && f.size === file.size && f.lastModified === file.lastModified
+    );
+    if (!duplicate) {
+      feedbackFiles.push(file);
+    }
+  }
+
+  renderFeedbackFiles();
+  if (warnings.length) {
+    setFeedbackStatus("error", warnings.join(" "));
+  } else {
+    clearFeedbackStatus();
+  }
+}
+
+function renderFeedbackFiles() {
+  const listEl = document.getElementById("fbFileList");
+  listEl.innerHTML = "";
+  feedbackFiles.forEach((file, idx) => {
+    const chip = document.createElement("div");
+    chip.className = "fb-file-chip";
+    chip.innerHTML =
+      `<span class="fb-file-chip-meta"><span class="fb-file-chip-name">${esc(file.name)}</span><span class="fb-file-chip-size">${esc(formatByteSize(file.size))}</span></span>` +
+      `<button type="button" class="fb-file-remove" aria-label="Remove ${esc(file.name)}" title="Remove">✕</button>`;
+    chip.querySelector(".fb-file-remove").addEventListener("click", () => {
+      if (feedbackSubmitting) return;
+      feedbackFiles.splice(idx, 1);
+      renderFeedbackFiles();
+    });
+    listEl.appendChild(chip);
+  });
+}
+
+function setFeedbackStatus(kind, text) {
+  const el = document.getElementById("fbStatus");
+  el.className = `fb-status ${kind}`;
+  el.textContent = text;
+}
+
+function clearFeedbackStatus() {
+  const el = document.getElementById("fbStatus");
+  el.className = "fb-status hidden";
+  el.textContent = "";
+}
+
+function syncFeedbackModeUI() {
+  const direct = hasDirectFeedbackEndpoint();
+  const uploadGroup = document.getElementById("fbUploadGroup");
+  const directActions = document.getElementById("fbDirectActions");
+  const fallbackActions = document.getElementById("fbFallbackActions");
+  const fallbackPrefix = document.getElementById("fbFallbackPrefix");
+  const mailtoBtn = document.getElementById("fbMailtoBtn");
+  const gmailBtn = document.getElementById("fbGmailBtn");
+  const copyBtn = document.getElementById("fbCopyBtn");
+
+  uploadGroup.classList.toggle("hidden", !direct);
+  directActions.classList.toggle("hidden", !direct);
+  fallbackPrefix.classList.toggle("hidden", !direct);
+  fallbackActions.classList.toggle("fb-actions-subtle", direct);
+  mailtoBtn.classList.toggle("primary", !direct);
+  mailtoBtn.textContent = direct ? "Email App" : "✉ Open Email App";
+  gmailBtn.textContent = direct ? "Gmail" : "Open in Gmail";
+  copyBtn.textContent = direct ? "Copy" : "Copy Message";
 }
 
 function openFeedbackModal(pid) {
   const p = DATA?.people?.[pid];
   if (!p) return;
   feedbackPid = pid;
+  feedbackFiles = [];
+  feedbackSubmitting = false;
 
   document.getElementById("fbModalTitle").textContent = `Send Feedback · ${p.name}`;
   document.getElementById("fbPersonBanner").innerHTML =
@@ -2594,7 +2736,19 @@ function openFeedbackModal(pid) {
       senderEl.value = localStorage.getItem("ancestry_fb_name") || "";
     } catch {}
   }
+  const emailEl = document.getElementById("fbSenderEmail");
+  if (!emailEl.value) {
+    try {
+      emailEl.value = localStorage.getItem("ancestry_fb_email") || "";
+    } catch {}
+  }
   document.getElementById("fbMessage").value = "";
+  document.getElementById("fbFiles").value = "";
+  document.getElementById("fbSubmitBtn").disabled = false;
+  document.getElementById("fbSubmitBtn").textContent = "Send Feedback";
+  renderFeedbackFiles();
+  clearFeedbackStatus();
+  syncFeedbackModeUI();
   updateFeedbackLinks();
 
   document.getElementById("feedbackModal").classList.remove("hidden");
@@ -2602,8 +2756,10 @@ function openFeedbackModal(pid) {
 }
 
 function closeFeedbackModal() {
+  if (feedbackSubmitting) return;
   document.getElementById("feedbackModal").classList.add("hidden");
   feedbackPid = null;
+  feedbackFiles = [];
 }
 
 function buildFeedbackEmailContent() {
@@ -2611,6 +2767,7 @@ function buildFeedbackEmailContent() {
   const to = DATA?.tree?.feedbackEmail || "";
   const topic = document.getElementById("fbTopic").value;
   const sender = document.getElementById("fbSenderName").value.trim();
+  const senderEmail = document.getElementById("fbSenderEmail").value.trim();
   const message = document.getElementById("fbMessage").value.trim();
 
   const personLabel = p ? `${p.name}${p.lifeRange ? ` (${p.lifeRange})` : ""}` : "Family Tree";
@@ -2621,6 +2778,7 @@ function buildFeedbackEmailContent() {
     p ? `Person ID: ${p.id}` : "",
     `Topic: ${topic}`,
     sender ? `From: ${sender}` : "",
+    senderEmail ? `Reply Email: ${senderEmail}` : "",
     "",
     message || "(Write your notes or correction here)",
   ].filter((l, i, arr) => l !== "" || (i > 0 && arr[i - 1] !== ""));
@@ -2637,9 +2795,125 @@ function updateFeedbackLinks() {
   document.getElementById("fbGmailBtn").href = gmailUrl;
 
   const noteEl = document.getElementById("fbRecipientNote");
-  noteEl.textContent = to
-    ? `Addressed to ${to} — opens pre-filled in your email app or Gmail.`
-    : `Opens a pre-filled draft in your email app or Gmail (enter recipient address before sending).`;
+  if (hasDirectFeedbackEndpoint()) {
+    noteEl.textContent = to
+      ? `Sends directly from this page (logged & emailed to ${to}).`
+      : `Sends directly from this page — no email app required.`;
+  } else {
+    noteEl.textContent = to
+      ? `Addressed to ${to} — opens pre-filled in your email app or Gmail.`
+      : `Opens a pre-filled draft in your email app or Gmail (enter recipient address before sending).`;
+  }
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const commaIdx = result.indexOf(",");
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(new Error(`Could not read file "${file.name}".`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function submitFeedbackDirect() {
+  if (feedbackSubmitting) return;
+  const endpoint = String(DATA?.tree?.feedbackEndpoint || "").trim();
+  if (!endpoint) return;
+
+  const p = DATA?.people?.[feedbackPid];
+  const topic = document.getElementById("fbTopic").value;
+  const senderName = document.getElementById("fbSenderName").value.trim();
+  const senderEmail = document.getElementById("fbSenderEmail").value.trim();
+  const message = document.getElementById("fbMessage").value.trim();
+
+  if (!message && feedbackFiles.length === 0) {
+    setFeedbackStatus("error", "Please enter a note or attach a photo/document before sending.");
+    document.getElementById("fbMessage").focus();
+    return;
+  }
+
+  const submitBtn = document.getElementById("fbSubmitBtn");
+  feedbackSubmitting = true;
+  submitBtn.disabled = true;
+  submitBtn.textContent = feedbackFiles.length ? "Uploading & Sending…" : "Sending…";
+  setFeedbackStatus(
+    "loading",
+    feedbackFiles.length
+      ? `Uploading ${feedbackFiles.length} attachment${feedbackFiles.length > 1 ? "s" : ""} and sending your feedback…`
+      : "Sending your feedback…"
+  );
+
+  try {
+    const attachments = [];
+    for (const file of feedbackFiles) {
+      const dataBase64 = await readFileAsBase64(file);
+      attachments.push({
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        dataBase64,
+      });
+    }
+
+    const payload = {
+      secret: DATA?.tree?.feedbackSecret || "",
+      treeName: DATA?.tree?.treeName || "Family Tree",
+      personId: p ? String(p.id) : "",
+      personName: p ? p.name : "General",
+      lifeRange: p ? p.lifeRange || "" : "",
+      topic,
+      senderName,
+      senderEmail,
+      message,
+      pageUrl: window.location.href,
+      attachments,
+    };
+
+    // text/plain avoids a CORS preflight request so Google Apps Script Web Apps
+    // accept the POST and return readable JSON after their 302 redirect.
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+      redirect: "follow",
+    });
+
+    const rawText = await resp.text();
+    let result = null;
+    try {
+      result = JSON.parse(rawText);
+    } catch {}
+
+    if (!resp.ok || !result || result.ok !== true) {
+      const errMsg =
+        result?.error ||
+        `Submission failed (HTTP ${resp.status}). You can still use the email links below.`;
+      throw new Error(errMsg);
+    }
+
+    const attNote =
+      result.attachmentCount > 0
+        ? ` (${result.attachmentCount} attachment${result.attachmentCount > 1 ? "s" : ""} saved)`
+        : "";
+    setFeedbackStatus("success", `✓ Feedback sent${attNote}! Thank you for helping improve the family tree.`);
+    document.getElementById("fbMessage").value = "";
+    feedbackFiles = [];
+    renderFeedbackFiles();
+    updateFeedbackLinks();
+    submitBtn.textContent = "Send Another";
+  } catch (err) {
+    setFeedbackStatus(
+      "error",
+      `${err.message || "Could not reach the feedback service."} You can try again or use Email App / Gmail below.`
+    );
+    submitBtn.textContent = "Retry Send";
+  } finally {
+    feedbackSubmitting = false;
+    submitBtn.disabled = false;
+  }
 }
 
 init();
