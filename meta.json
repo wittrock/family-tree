@@ -4,8 +4,8 @@
   "kdf": "PBKDF2",
   "hash": "SHA-256",
   "iterations": 310000,
-  "salt": "HU0JgB7hpqXmL4wGoyvByQ==",
-  "check": "ej07OKf3kf+YwT+a5pTVgQc8fMJQMT2twPywI5qG469Ss/C7cRe6Cs4UnuU=",
+  "salt": "M2ZISpe09ozO/newHw/PCw==",
+  "check": "EX8+do9hRcg7Kn6oriShQliRnUzKi8F8y2vocqRkBuIzygz6cRP2T9QpG0g=",
   "treeFile": "data/tree.json.enc",
   "treeTitle": "Mary Runyon family tree"
 }
