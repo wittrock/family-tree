@@ -313,6 +313,13 @@ function lockArchive() {
 /* ==================== App Startup & Navigation ==================== */
 
 function startApp() {
+  if (META?.treeTitle) {
+    DATA.tree.treeName = META.treeTitle;
+  }
+  if (META?.rootPersonId && DATA.people?.[META.rootPersonId]) {
+    DATA.tree.rootPersonId = META.rootPersonId;
+  }
+
   selectedPid = DATA.tree.rootPersonId;
   initTreeRoot(DATA.tree.rootPersonId);
 
