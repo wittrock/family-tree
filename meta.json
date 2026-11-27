@@ -4,8 +4,8 @@
   "kdf": "PBKDF2",
   "hash": "SHA-256",
   "iterations": 310000,
-  "salt": "jOYRgMJM7+ouQRMWD1iQNA==",
-  "check": "SME1GGNpBNYjZK+TuE/wNVSszKyzks9+ShrWaVjCgY/WkX0bLWjJrQfHLII=",
+  "salt": "yporMKvSuaOCWkZqltDi/A==",
+  "check": "Zja5QTGBy5oRd374KoJL/ZgHd5w78xSeEWsMHk3gXjj+JuS6JLgrp2Dvy4Q=",
   "treeFile": "data/tree.json.enc",
   "treeTitle": "Wittrock-Wood family tree",
   "rootPersonId": "222804552587"
